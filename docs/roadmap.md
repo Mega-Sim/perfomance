@@ -1,0 +1,4 @@
+- Phase A/B: Graph Engine (완료)
+- Phase C: Event Engine Core
+- Phase D: Multi-OHT + Traffic/Collision
+- Phase E: Scheduler/Optimization
