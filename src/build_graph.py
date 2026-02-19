@@ -611,8 +611,35 @@ def render(edge_list, adj, station_nodes, assign, out_png: Path, arrow_scale=6):
     plt.close(fig)
 
 def dump_graph(edge_list, station_nodes, assign, out_json: Path):
+    """
+    C 시뮬레이션 엔진이 바로 소비할 수 있는 포맷으로 그래프를 직렬화한다.
+    """
+    # ── 1. 노드 목록 (좌표 → 정수 ID) ──────────────────────────────
+    all_coords = sorted(set(
+        [e["u"] for e in edge_list]  [e["v"] for e in edge_list]
+    ))
+    coord_to_id = {c: i for i, c in enumerate(all_coords)}
+
+    station_coord_to_name = {tuple(v): k for k, v in station_nodes.items()}
+
+    nodes = []
+    for coord in all_coords:
+        nid = coord_to_id[coord]
+        sname = station_coord_to_name.get(coord)
+        nodes.append({
+            "id":           nid,
+            "x":            coord[0],
+            "y":            coord[1],
+            "kind":         "station" if sname else "normal",
+            "station_name": sname,
+            "out_edges":    [],
+            "in_edges":     [],
+        })
+
+    # ── 2. 엣지 목록 ───────────────────────────────────────────────
     edges=[]
     for e in edge_list:
+    '''  
         eid=e["id"]
         t,h=tail_head(edge_list,eid,assign[eid])
         rec={
@@ -636,6 +663,79 @@ def dump_graph(edge_list, station_nodes, assign, out_json: Path):
         "edges": edges
     }
     out_json.write_text(json.dumps(dump, ensure_ascii=False, indent=2), encoding="utf-8")
+    '''
+      eid = e["id"]
+      t_coord, h_coord = tail_head(edge_list, eid, assign[eid])
+      t_id = coord_to_id[t_coord]
+      h_id = coord_to_id[h_coord]
+
+      if e["src"] == "LINE":
+          g = e["geom"]
+          length = math.hypot(g["p2"][0] - g["p1"][0], g["p2"][1] - g["p1"][1])
+          geom = {
+              "type": "line",
+              "x1": g["p1"][0], "y1": g["p1"][1],
+              "x2": g["p2"][0], "y2": g["p2"][1],
+          }
+      else:  # ARC
+          g = e["geom"]
+          travel_ccw = (t_coord == e["u"] and h_coord == e["v"])
+          sweep = ccw_sweep_deg(g["a0"], g["a1"])
+          length = math.radians(sweep) * g["r"]
+          geom = {
+              "type":       "arc",
+              "cx":         g["cx"],
+              "cy":         g["cy"],
+              "r":          g["r"],
+              "a0":         g["a0"],
+              "a1":         g["a1"],
+              "travel_ccw": travel_ccw,
+              "x0":         t_coord[0],
+              "y0":         t_coord[1],
+              "x1":         h_coord[0],
+              "y1":         h_coord[1],
+          }
+
+      edges.append({
+          "id":     eid,
+          "tail":   t_id,
+          "head":   h_id,
+          "kind":   e["kind"],
+          "length": round(length, 6),
+          "geom":   geom,
+      })
+
+      nodes[t_id]["out_edges"].append(eid)
+      nodes[h_id]["in_edges"].append(eid)
+
+  # ── 3. 단방향 인접 리스트 ──────────────────────────────────────
+  adjacency = {str(n["id"]): [] for n in nodes}
+  for e in edges:
+      adjacency[str(e["tail"])].append(e["head"])
+
+  # ── 4. 스테이션 매핑 ───────────────────────────────────────────
+  stations = {}
+  for name, coord in station_nodes.items():
+      c = tuple(coord)
+      nid = coord_to_id.get(c)
+      if nid is None:
+          nid = min(coord_to_id, key=lambda k: math.hypot(k[0]-c[0], k[1]-c[1]))
+          nid = coord_to_id[nid]
+      stations[name] = {"node_id": nid, "x": coord[0], "y": coord[1]}
+
+  dump = {
+      "meta": {
+          "node_count":    len(nodes),
+          "edge_count":    len(edges),
+          "station_count": len(stations),
+      },
+      "nodes":     nodes,
+      "edges":     edges,
+      "stations":  stations,
+      "adjacency": adjacency,
+  }
+  out_json.write_text(json.dumps(dump, ensure_ascii=False, indent=2),
+                      encoding="utf-8")
 
 def main():
     if len(sys.argv) < 3:
