@@ -2,6 +2,7 @@
 #include "event_queue.hpp"
 #include "traffic.hpp"
 #include "world.hpp"
+
 #include <cstdint>
 #include <fstream>
 #include <string>
