@@ -12,5 +12,3 @@ add_executable(sim_run
 )
 
 target_link_libraries(sim_run PRIVATE sim_core)
-
-add_subdirectory(sim_core)
