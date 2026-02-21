@@ -19,21 +19,19 @@ static sim::World load_world(const std::string& path) {
 
   sim::World w;
 
+  w.nodes.resize(j.at("nodes").size());
   for (const auto& n : j.at("nodes")) {
-    sim::Node node;
-    node.id = n.at("id").get<int>();
-    node.x  = n.at("x").get<double>();
-    node.y  = n.at("y").get<double>();
-    w.nodes[node.id] = node;
+    int id = n.at("id").get<int>();
+    w.nodes[id] = sim::Node{id, n.at("x").get<double>(), n.at("y").get<double>()};
   }
 
+  w.edges.resize(j.at("edges").size());
   for (const auto& e : j.at("edges")) {
-    sim::Edge edge;
-    edge.id     = e.at("id").get<int>();
-    edge.tail   = e.at("tail").get<int>();
-    edge.head   = e.at("head").get<int>();
-    edge.length = e.at("length").get<double>();
-    w.edges[edge.id] = edge;
+    int id = e.at("id").get<int>();
+    w.edges[id] = sim::Edge{id,
+                            e.at("tail").get<int>(),
+                            e.at("head").get<int>(),
+                            e.at("length").get<double>()};
   }
 
   return w;
@@ -43,7 +41,7 @@ static std::vector<int> make_route_linear(const sim::World& w) {
   std::vector<int> r;
   r.reserve(w.edges.size());
   for (int id = 0; id < (int)w.edges.size(); ++id) {
-    if (w.edges.find(id) != w.edges.end()) r.push_back(id);
+    r.push_back(id);
   }
   return r;
 }
@@ -60,7 +58,8 @@ int main(int argc, char** argv) {
   o.id = 0;
   o.v_mps = 1.0;
   o.route_edges = make_route_linear(w);
-  w.ohts[o.id] = o;
+  w.ohts.resize(1);
+  w.ohts[0] = o;
 
   sim::Engine eng(std::move(w));
   eng.set_log_path(argv[2]);

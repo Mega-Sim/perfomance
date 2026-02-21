@@ -610,79 +610,87 @@ def render(edge_list, adj, station_nodes, assign, out_png: Path, arrow_scale=6):
     fig.savefig(out_png, dpi=220)
     plt.close(fig)
 
-def dump_graph(self, out_json_path):
+def dump_graph(edge_list, station_nodes, assign, out_json_path):
+    """
+    sim_core가 읽는 out.json 포맷으로 덤프:
+      - nodes: [{id,x,y}]
+      - edges: [{id,tail,head,length}]
+      - stations: {name:{node_id,x,y}}
+    tail/head는 '방향 그래프(assign)' 기준으로 결정됨.
+    """
     import json
     import math
 
-    # ----------------------------
-    # 1. 노드 정리 (중복 제거)
-    # ----------------------------
-    # 모든 엣지의 시작/끝 좌표 수집
-    coords = []
-    for (x1, y1, x2, y2) in self.edges:
-        coords.append((x1, y1))
-        coords.append((x2, y2))
+    # 1) 노드 수집: edge endpoint (u,v) 좌표를 node로 만든다
+    coord_set = []
+    for e in edge_list:
+        coord_set.append(e["u"])
+        coord_set.append(e["v"])
 
-    # 좌표를 유니크하게 정리
-    unique_coords = list(dict.fromkeys(coords))
+    # u/v는 이미 nk()로 round 된 (x,y) 튜플
+    unique_coords = list(dict.fromkeys(coord_set))  # 순서 보존 유니크
+    coord_to_id = {c: i for i, c in enumerate(unique_coords)}
 
-    # node id 부여
-    coord_to_id = {}
-    nodes = []
+    nodes = [{"id": i, "x": float(c[0]), "y": float(c[1])} for i, c in enumerate(unique_coords)]
 
-    for idx, (x, y) in enumerate(unique_coords):
-        coord_to_id[(x, y)] = idx
-        nodes.append({
-            "id": idx,
-            "x": float(x),
-            "y": float(y)
-        })
-
-    # ----------------------------
-    # 2. 엣지 생성
-    # ----------------------------
+    # 2) 엣지 생성: assign[eid]로 tail 결정 (0이면 u->v, 1이면 v->u)
     edges = []
+    for e in edge_list:
+        eid = e["id"]
+        u = e["u"]
+        v = e["v"]
 
-    for idx, (x1, y1, x2, y2) in enumerate(self.edges):
-        tail_id = coord_to_id[(x1, y1)]
-        head_id = coord_to_id[(x2, y2)]
+        # 방향 결정
+        if assign.get(eid, 0) == 0:
+            tail = u
+            head = v
+        else:
+            tail = v
+            head = u
 
-        length = math.hypot(x2 - x1, y2 - y1)
+        tail_id = coord_to_id[tail]
+        head_id = coord_to_id[head]
+
+        # 길이 계산
+        if e.get("src") == "ARC":
+            g = e["geom"]
+            r = float(g["r"])
+            a0 = float(g["a0"]) % 360.0
+            a1 = float(g["a1"]) % 360.0
+
+            # ARC의 "원래" 방향은 u(start)->v(end)로 저장돼 있음.
+            # 실제 이동 방향이 u->v면 CCW sweep, v->u면 반대 sweep으로 간주.
+            travel_u_to_v = (tail == u and head == v)
+
+            sweep_deg = ccw_sweep_deg(a0, a1)
+            if not travel_u_to_v:
+                sweep_deg = 360.0 - sweep_deg
+
+            length = (math.radians(sweep_deg) * r)
+        else:
+            # LINE
+            length = math.hypot(head[0] - tail[0], head[1] - tail[1])
 
         edges.append({
-            "id": idx,
-            "tail": tail_id,
-            "head": head_id,
-            "length": float(length)
+            "id": int(eid),
+            "tail": int(tail_id),
+            "head": int(head_id),
+            "length": float(length),
         })
 
-    # ----------------------------
-    # 3. 스테이션 (있으면)
-    # ----------------------------
+    # 3) stations: station_nodes는 name -> nk(coord) 형태
     stations = {}
-    if hasattr(self, "stations"):
-        for name, (x, y) in self.stations.items():
-            if (x, y) in coord_to_id:
-                stations[name] = {
-                    "node_id": coord_to_id[(x, y)],
-                    "x": float(x),
-                    "y": float(y)
-                }
+    for name, coord in station_nodes.items():
+        if coord in coord_to_id:
+            nid = coord_to_id[coord]
+            stations[name] = {"node_id": int(nid), "x": float(coord[0]), "y": float(coord[1])}
 
-    # ----------------------------
-    # 4. JSON 저장
-    # ----------------------------
-    graph_data = {
-        "nodes": nodes,
-        "edges": edges,
-        "stations": stations
-    }
+    graph_data = {"nodes": nodes, "edges": edges, "stations": stations}
 
     with open(out_json_path, "w", encoding="utf-8") as f:
         json.dump(graph_data, f, indent=2)
 
     print(f"[OK] Graph exported: {out_json_path}")
-
 def main():
     if len(sys.argv) < 3:
         print("usage: python build_directed_graph_outer_cw_propagate_curves.py <in.dxf> <out.png> [out.json]")
