@@ -1,6 +1,5 @@
 #pragma once
 #include <cstddef>
-#include <unordered_map>
 #include <vector>
 
 namespace sim {
@@ -26,9 +25,9 @@ struct Oht {
 };
 
 struct World {
-  std::unordered_map<int, Node> nodes;
-  std::unordered_map<int, Edge> edges;
-  std::unordered_map<int, Oht>  ohts;
+  std::vector<Node> nodes;
+  std::vector<Edge> edges;
+  std::vector<Oht>  ohts;
 };
 
 } // namespace sim
