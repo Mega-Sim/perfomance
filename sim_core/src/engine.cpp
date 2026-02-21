@@ -6,6 +6,8 @@
 namespace sim {
 
 void Engine::run(int64_t end_time_ns) {
+  traffic_.init(world_.edges.size());
+
   while (!eq_.empty()) {
     Event ev = eq_.pop();
     if (ev.time_ns > end_time_ns) break;
@@ -22,7 +24,7 @@ void Engine::run(int64_t end_time_ns) {
 }
 
 void Engine::on_spawn(const Event& ev) {
-  auto& o = world_.ohts.at(ev.oht_id);
+  auto& o = world_.ohts[ev.oht_id];
   if (o.route_edges.empty()) return;
 
   int e0 = o.route_edges[0];
@@ -40,8 +42,8 @@ void Engine::on_request_enter(const Event& ev) {
 }
 
 void Engine::on_enter_edge(const Event& ev) {
-  const auto& o = world_.ohts.at(ev.oht_id);
-  const auto& e = world_.edges.at(ev.edge_id);
+  const auto& o = world_.ohts[ev.oht_id];
+  const auto& e = world_.edges[ev.edge_id];
 
   double dt_s = e.length / o.v_mps;
   int64_t dt_ns = (int64_t)std::llround(dt_s * 1'000'000'000.0);
@@ -55,8 +57,8 @@ void Engine::on_enter_edge(const Event& ev) {
 }
 
 void Engine::on_exit_edge(const Event& ev) {
-  auto& o = world_.ohts.at(ev.oht_id);
-  const auto& e = world_.edges.at(ev.edge_id);
+  auto& o = world_.ohts[ev.oht_id];
+  const auto& e = world_.edges[ev.edge_id];
 
   int next_oht = traffic_.release_and_pick_next(ev.edge_id, ev.oht_id);
   if (next_oht != -1) {
