@@ -8,7 +8,7 @@ target_include_directories(sim_core PUBLIC
 )
 
 add_executable(sim_run
-  apps/sim_run.cpp
+  apps/sim_runs.cpp
 )
 
 target_link_libraries(sim_run PRIVATE sim_core)
