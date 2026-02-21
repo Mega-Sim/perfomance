@@ -610,132 +610,78 @@ def render(edge_list, adj, station_nodes, assign, out_png: Path, arrow_scale=6):
     fig.savefig(out_png, dpi=220)
     plt.close(fig)
 
-def dump_graph(edge_list, station_nodes, assign, out_json: Path):
-    """
-    C 시뮬레이션 엔진이 바로 소비할 수 있는 포맷으로 그래프를 직렬화한다.
-    """
-    # ── 1. 노드 목록 (좌표 → 정수 ID) ──────────────────────────────
-    all_coords = sorted(set(
-        [e["u"] for e in edge_list]  [e["v"] for e in edge_list]
-    ))
-    coord_to_id = {c: i for i, c in enumerate(all_coords)}
+def dump_graph(self, out_json_path):
+    import json
+    import math
 
-    station_coord_to_name = {tuple(v): k for k, v in station_nodes.items()}
+    # ----------------------------
+    # 1. 노드 정리 (중복 제거)
+    # ----------------------------
+    # 모든 엣지의 시작/끝 좌표 수집
+    coords = []
+    for (x1, y1, x2, y2) in self.edges:
+        coords.append((x1, y1))
+        coords.append((x2, y2))
 
+    # 좌표를 유니크하게 정리
+    unique_coords = list(dict.fromkeys(coords))
+
+    # node id 부여
+    coord_to_id = {}
     nodes = []
-    for coord in all_coords:
-        nid = coord_to_id[coord]
-        sname = station_coord_to_name.get(coord)
+
+    for idx, (x, y) in enumerate(unique_coords):
+        coord_to_id[(x, y)] = idx
         nodes.append({
-            "id":           nid,
-            "x":            coord[0],
-            "y":            coord[1],
-            "kind":         "station" if sname else "normal",
-            "station_name": sname,
-            "out_edges":    [],
-            "in_edges":     [],
+            "id": idx,
+            "x": float(x),
+            "y": float(y)
         })
 
-    # ── 2. 엣지 목록 ───────────────────────────────────────────────
-    edges=[]
-    for e in edge_list:
-    '''  
-        eid=e["id"]
-        t,h=tail_head(edge_list,eid,assign[eid])
-        rec={
-            "id": eid,
-            "src": e["src"],
-            "kind": e["kind"],
-            "u": list(e["u"]),
-            "v": list(e["v"]),
-            "tail": list(t),
-            "head": list(h),
-        }
-        if e["src"]=="LINE":
-            rec["geom"]=e["geom"]
-        else:
-            rec["geom"]=e["geom"]
-            rec["travel_ccw"] = True if (t==e["u"] and h==e["v"]) else False
-        edges.append(rec)
-    dump={
-        "nodes": [list(n) for n in sorted(set([e["u"] for e in edge_list]+[e["v"] for e in edge_list]))],
-        "stations": {k:list(v) for k,v in station_nodes.items()},
-        "edges": edges
+    # ----------------------------
+    # 2. 엣지 생성
+    # ----------------------------
+    edges = []
+
+    for idx, (x1, y1, x2, y2) in enumerate(self.edges):
+        tail_id = coord_to_id[(x1, y1)]
+        head_id = coord_to_id[(x2, y2)]
+
+        length = math.hypot(x2 - x1, y2 - y1)
+
+        edges.append({
+            "id": idx,
+            "tail": tail_id,
+            "head": head_id,
+            "length": float(length)
+        })
+
+    # ----------------------------
+    # 3. 스테이션 (있으면)
+    # ----------------------------
+    stations = {}
+    if hasattr(self, "stations"):
+        for name, (x, y) in self.stations.items():
+            if (x, y) in coord_to_id:
+                stations[name] = {
+                    "node_id": coord_to_id[(x, y)],
+                    "x": float(x),
+                    "y": float(y)
+                }
+
+    # ----------------------------
+    # 4. JSON 저장
+    # ----------------------------
+    graph_data = {
+        "nodes": nodes,
+        "edges": edges,
+        "stations": stations
     }
-    out_json.write_text(json.dumps(dump, ensure_ascii=False, indent=2), encoding="utf-8")
-    '''
-      eid = e["id"]
-      t_coord, h_coord = tail_head(edge_list, eid, assign[eid])
-      t_id = coord_to_id[t_coord]
-      h_id = coord_to_id[h_coord]
 
-      if e["src"] == "LINE":
-          g = e["geom"]
-          length = math.hypot(g["p2"][0] - g["p1"][0], g["p2"][1] - g["p1"][1])
-          geom = {
-              "type": "line",
-              "x1": g["p1"][0], "y1": g["p1"][1],
-              "x2": g["p2"][0], "y2": g["p2"][1],
-          }
-      else:  # ARC
-          g = e["geom"]
-          travel_ccw = (t_coord == e["u"] and h_coord == e["v"])
-          sweep = ccw_sweep_deg(g["a0"], g["a1"])
-          length = math.radians(sweep) * g["r"]
-          geom = {
-              "type":       "arc",
-              "cx":         g["cx"],
-              "cy":         g["cy"],
-              "r":          g["r"],
-              "a0":         g["a0"],
-              "a1":         g["a1"],
-              "travel_ccw": travel_ccw,
-              "x0":         t_coord[0],
-              "y0":         t_coord[1],
-              "x1":         h_coord[0],
-              "y1":         h_coord[1],
-          }
+    with open(out_json_path, "w", encoding="utf-8") as f:
+        json.dump(graph_data, f, indent=2)
 
-      edges.append({
-          "id":     eid,
-          "tail":   t_id,
-          "head":   h_id,
-          "kind":   e["kind"],
-          "length": round(length, 6),
-          "geom":   geom,
-      })
-
-      nodes[t_id]["out_edges"].append(eid)
-      nodes[h_id]["in_edges"].append(eid)
-
-  # ── 3. 단방향 인접 리스트 ──────────────────────────────────────
-  adjacency = {str(n["id"]): [] for n in nodes}
-  for e in edges:
-      adjacency[str(e["tail"])].append(e["head"])
-
-  # ── 4. 스테이션 매핑 ───────────────────────────────────────────
-  stations = {}
-  for name, coord in station_nodes.items():
-      c = tuple(coord)
-      nid = coord_to_id.get(c)
-      if nid is None:
-          nid = min(coord_to_id, key=lambda k: math.hypot(k[0]-c[0], k[1]-c[1]))
-          nid = coord_to_id[nid]
-      stations[name] = {"node_id": nid, "x": coord[0], "y": coord[1]}
-
-  dump = {
-      "meta": {
-          "node_count":    len(nodes),
-          "edge_count":    len(edges),
-          "station_count": len(stations),
-      },
-      "nodes":     nodes,
-      "edges":     edges,
-      "stations":  stations,
-      "adjacency": adjacency,
-  }
-  out_json.write_text(json.dumps(dump, ensure_ascii=False, indent=2),
-                      encoding="utf-8")
+    print(f"[OK] Graph exported: {out_json_path}")
 
 def main():
     if len(sys.argv) < 3:
