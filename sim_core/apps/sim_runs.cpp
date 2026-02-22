@@ -9,7 +9,6 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "json.hpp"
@@ -47,7 +46,6 @@ static sim::World load_world(const std::string& path,
 
   sim::World w;
 
-  // nodes
   w.nodes.resize(j.at("nodes").size());
   for (const auto& n : j.at("nodes")) {
     const int id = n.at("id").get<int>();
@@ -55,7 +53,6 @@ static sim::World load_world(const std::string& path,
     w.nodes[id] = sim::Node{id, n.at("x").get<double>(), n.at("y").get<double>()};
   }
 
-  // edges
   w.edges.resize(j.at("edges").size());
   for (const auto& e : j.at("edges")) {
     const int id = e.at("id").get<int>();
@@ -66,7 +63,6 @@ static sim::World load_world(const std::string& path,
                             e.at("length").get<double>()};
   }
 
-  // stations (optional)
   stations_out.clear();
   if (j.contains("stations") && j.at("stations").is_object()) {
     for (auto it = j["stations"].begin(); it != j["stations"].end(); ++it) {
@@ -92,19 +88,18 @@ static void build_degrees(const sim::World& w, std::vector<int>& in_deg, std::ve
   }
 }
 
-static std::vector<int> build_candidate_nodes(const sim::World& w,
-                                              const std::unordered_map<std::string, StationInfo>& stations) {
+static std::vector<int> build_candidate_nodes(
+    const sim::World& w,
+    const std::unordered_map<std::string, StationInfo>& stations) {
   std::vector<int> in_deg, out_deg;
   build_degrees(w, in_deg, out_deg);
 
   std::vector<unsigned char> mark(w.nodes.size(), 0);
 
-  // decision nodes: (in!=1 || out!=1)
   for (int n = 0; n < (int)w.nodes.size(); ++n) {
     if (in_deg[n] != 1 || out_deg[n] != 1) mark[n] = 1;
   }
 
-  // station nodes (if any)
   for (const auto& kv : stations) {
     const int nid = kv.second.node_id;
     if (nid >= 0 && nid < (int)mark.size()) mark[nid] = 1;
@@ -116,12 +111,12 @@ static std::vector<int> build_candidate_nodes(const sim::World& w,
     if (mark[n]) cand.push_back(n);
   }
 
-  // fallback if graph is too "linear"
   if (cand.size() < 4) {
     cand.clear();
     cand.reserve(w.nodes.size());
     for (int n = 0; n < (int)w.nodes.size(); ++n) cand.push_back(n);
   }
+
   return cand;
 }
 
@@ -139,8 +134,8 @@ int main(int argc, char** argv) {
   const std::string in_json = argv[1];
   const std::string out_log = argv[2];
 
-  // options
-  std::string start_station, end_station;
+  std::string start_station;
+  std::string end_station;
   int start_node = -1;
   int end_node = -1;
 
@@ -164,12 +159,10 @@ int main(int argc, char** argv) {
     else if (a == "--end") end_station = need("--end");
     else if (a == "--start-node") start_node = std::stoi(need("--start-node"));
     else if (a == "--end-node") end_node = std::stoi(need("--end-node"));
-
     else if (a == "--vehicles") vehicles = std::stoi(need("--vehicles"));
     else if (a == "--seed") seed = (uint64_t)std::stoull(need("--seed"));
     else if (a == "--sim-sec") sim_sec = std::stoi(need("--sim-sec"));
     else if (a == "--spawn-interval-ms") spawn_interval_ms = std::stoi(need("--spawn-interval-ms"));
-
     else {
       std::cerr << "unknown option: " << a << "\n";
       print_usage();
@@ -193,7 +186,6 @@ int main(int argc, char** argv) {
   std::unordered_map<std::string, StationInfo> stations;
   sim::World w = load_world(in_json, stations);
 
-  // resolve single-path station -> node if provided
   if (start_node < 0 && !start_station.empty()) {
     auto it = stations.find(start_station);
     if (it != stations.end()) start_node = it->second.node_id;
@@ -203,14 +195,11 @@ int main(int argc, char** argv) {
     if (it != stations.end()) end_node = it->second.node_id;
   }
 
-  // PathFinder (overlay + A*)
   sim::PathFinder pf(w);
 
-  // candidate nodes for random pairs (multi vehicles)
   std::vector<int> cand_nodes = build_candidate_nodes(w, stations);
   std::mt19937_64 rng(seed);
 
-  // build ohts
   w.ohts.clear();
   w.ohts.resize((size_t)vehicles);
 
@@ -219,14 +208,11 @@ int main(int argc, char** argv) {
     int t = end_node;
 
     if (vehicles > 1 || (start_node < 0 || end_node < 0)) {
-      // multi mode: random start/goal unless explicit nodes are provided for single
-      // (확장성: 추후 parking/회피는 여기서 start를 edge-mid로도 설정 가능)
       do {
         s = pick_node(rng, cand_nodes);
         t = pick_node(rng, cand_nodes);
       } while (s == t);
     } else {
-      // single mode requires resolved start/end
       if (s < 0 || t < 0) {
         std::cerr << "start/end not resolved.\n";
         print_usage();
@@ -236,7 +222,6 @@ int main(int argc, char** argv) {
 
     std::vector<int> route = pf.find_path_edges_astar_overlay(s, t);
     if (route.empty() && s != t) {
-      // 실패하면 몇 번 재시도 (그래프가 분리돼 있을 수 있음)
       bool ok = false;
       for (int retry = 0; retry < 8 && !ok; ++retry) {
         int rs = pick_node(rng, cand_nodes);
@@ -244,9 +229,20 @@ int main(int argc, char** argv) {
         if (rs == rt) continue;
         route = pf.find_path_edges_astar_overlay(rs, rt);
         if (!route.empty()) {
-          s = rs;
-          t = rt;
           ok = true;
+        }
+      }
+      if (!ok) {
+        for (int rs : cand_nodes) {
+          for (int rt : cand_nodes) {
+            if (rs == rt) continue;
+            route = pf.find_path_edges_astar_overlay(rs, rt);
+            if (!route.empty()) {
+              ok = true;
+              break;
+            }
+          }
+          if (ok) break;
         }
       }
       if (!ok) {
@@ -265,6 +261,8 @@ int main(int argc, char** argv) {
 
   sim::Engine eng(std::move(w));
   eng.set_log_path(out_log);
+  eng.set_stats_output(true);
+  eng.set_verbose_events(false);
 
   const int64_t spawn_dt_ns = (int64_t)spawn_interval_ms * 1'000'000LL;
   for (int i = 0; i < vehicles; ++i) {
