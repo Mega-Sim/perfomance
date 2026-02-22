@@ -1,5 +1,6 @@
 add_library(sim_core
   src/engine.cpp
+  src/path_finder.cpp
 )
 
 target_include_directories(sim_core PUBLIC
