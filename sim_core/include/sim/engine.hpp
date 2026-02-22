@@ -53,6 +53,7 @@ private:
   void on_arrive(const Event& ev);
 
   void maybe_dump_stats();
+  void dump_final_stats();  // ✅ final summary 1줄
 
   void log_line(const std::string& s) {
     if (log_.is_open()) log_ << s << "\n";

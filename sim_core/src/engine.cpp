@@ -26,18 +26,13 @@ void Engine::run(int64_t end_time_ns) {
     maybe_dump_stats();
   }
 
-  // 종료 시점에 마지막 통계 1회
-  if (stats_output_) {
-    // now_ns_가 0일 수도 있으니, 최소 1번은 찍고 싶으면 여기서 강제 출력 가능
-    // 현재는 "다음 dump 시점이 이미 지났으면"만 출력하도록 maybe_dump_stats()에 맡김.
-    // 필요하면 여기서 final summary를 찍을 수도 있음.
-  }
+  // ✅ 실행 시간이 1초 미만이어도 반드시 1줄은 남기기
+  dump_final_stats();
 }
 
 void Engine::maybe_dump_stats() {
   if (!stats_output_) return;
 
-  // 이벤트 시간 점프가 있을 수 있으니 while로 처리
   while (now_ns_ >= next_stat_dump_ns_) {
     const int64_t t_sec = next_stat_dump_ns_ / kStatIntervalNs;
 
@@ -64,10 +59,42 @@ void Engine::maybe_dump_stats() {
        << "}";
 
     log_line(ss.str());
-
     last_dump_stats_ = stats_;
     next_stat_dump_ns_ += kStatIntervalNs;
   }
+}
+
+void Engine::dump_final_stats() {
+  if (!stats_output_) return;
+
+  // 마지막 덤프가 안 찍혔을 수도 있으니, 현재 시각(now_ns_) 기준으로 1줄 더 남김
+  const int64_t t_sec = now_ns_ / kStatIntervalNs;
+
+  const uint64_t d_events = stats_.events_popped - last_dump_stats_.events_popped;
+  const uint64_t d_enter  = stats_.enter_count - last_dump_stats_.enter_count;
+  const uint64_t d_exit   = stats_.exit_count - last_dump_stats_.exit_count;
+  const uint64_t d_wait   = stats_.wait_fail_count - last_dump_stats_.wait_fail_count;
+  const uint64_t d_done   = stats_.completed_oht - last_dump_stats_.completed_oht;
+
+  std::ostringstream ss;
+  ss << "{"
+     << "\"t_sec\":" << t_sec
+     << ",\"events\":" << stats_.events_popped
+     << ",\"enter\":" << stats_.enter_count
+     << ",\"exit\":" << stats_.exit_count
+     << ",\"wait\":" << stats_.wait_fail_count
+     << ",\"done\":" << stats_.completed_oht
+     << ",\"maxq\":" << stats_.max_queue_len
+     << ",\"d_events\":" << d_events
+     << ",\"d_enter\":" << d_enter
+     << ",\"d_exit\":" << d_exit
+     << ",\"d_wait\":" << d_wait
+     << ",\"d_done\":" << d_done
+     << ",\"final\":1"
+     << "}";
+
+  log_line(ss.str());
+  last_dump_stats_ = stats_;
 }
 
 void Engine::on_spawn(const Event& ev) {
