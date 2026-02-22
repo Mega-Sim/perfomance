@@ -2,11 +2,15 @@
 #include "sim/path_finder.hpp"
 #include "sim/world.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "json.hpp"
 using json = nlohmann::json;
@@ -20,12 +24,21 @@ struct StationInfo {
 static void print_usage() {
   std::cerr
       << "usage:\n"
-      << "  sim_run <out.json> <out.jsonl> --start <station> --end <station>\n"
-      << "  sim_run <out.json> <out.jsonl> --start-node <id> --end-node <id>\n";
+      << "  sim_run <world.json> <out.stats.jsonl> [options]\n"
+      << "\n"
+      << "single path (optional):\n"
+      << "  --start <station> --end <station>\n"
+      << "  --start-node <id> --end-node <id>\n"
+      << "\n"
+      << "multi vehicles:\n"
+      << "  --vehicles N            (default: 1)\n"
+      << "  --seed S                (default: 1)\n"
+      << "  --sim-sec T             (default: 60)\n"
+      << "  --spawn-interval-ms K   (default: 0)\n";
 }
 
 static sim::World load_world(const std::string& path,
-                             std::unordered_map<std::string, StationInfo>& stations_out) {
+                            std::unordered_map<std::string, StationInfo>& stations_out) {
   std::ifstream ifs(path);
   if (!ifs) throw std::runtime_error("cannot open json: " + path);
 
@@ -70,6 +83,53 @@ static sim::World load_world(const std::string& path,
   return w;
 }
 
+static void build_degrees(const sim::World& w, std::vector<int>& in_deg, std::vector<int>& out_deg) {
+  in_deg.assign(w.nodes.size(), 0);
+  out_deg.assign(w.nodes.size(), 0);
+  for (const auto& e : w.edges) {
+    if (e.tail >= 0 && e.tail < (int)w.nodes.size()) out_deg[e.tail]++;
+    if (e.head >= 0 && e.head < (int)w.nodes.size()) in_deg[e.head]++;
+  }
+}
+
+static std::vector<int> build_candidate_nodes(const sim::World& w,
+                                              const std::unordered_map<std::string, StationInfo>& stations) {
+  std::vector<int> in_deg, out_deg;
+  build_degrees(w, in_deg, out_deg);
+
+  std::vector<unsigned char> mark(w.nodes.size(), 0);
+
+  // decision nodes: (in!=1 || out!=1)
+  for (int n = 0; n < (int)w.nodes.size(); ++n) {
+    if (in_deg[n] != 1 || out_deg[n] != 1) mark[n] = 1;
+  }
+
+  // station nodes (if any)
+  for (const auto& kv : stations) {
+    const int nid = kv.second.node_id;
+    if (nid >= 0 && nid < (int)mark.size()) mark[nid] = 1;
+  }
+
+  std::vector<int> cand;
+  cand.reserve(w.nodes.size());
+  for (int n = 0; n < (int)mark.size(); ++n) {
+    if (mark[n]) cand.push_back(n);
+  }
+
+  // fallback if graph is too "linear"
+  if (cand.size() < 4) {
+    cand.clear();
+    cand.reserve(w.nodes.size());
+    for (int n = 0; n < (int)w.nodes.size(); ++n) cand.push_back(n);
+  }
+  return cand;
+}
+
+static int pick_node(std::mt19937_64& rng, const std::vector<int>& cand) {
+  std::uniform_int_distribution<size_t> dist(0, cand.size() - 1);
+  return cand[dist(rng)];
+}
+
 int main(int argc, char** argv) {
   if (argc < 3) {
     print_usage();
@@ -79,12 +139,19 @@ int main(int argc, char** argv) {
   const std::string in_json = argv[1];
   const std::string out_log = argv[2];
 
+  // options
   std::string start_station, end_station;
   int start_node = -1;
   int end_node = -1;
 
+  int vehicles = 1;
+  uint64_t seed = 1;
+  int sim_sec = 60;
+  int spawn_interval_ms = 0;
+
   for (int i = 3; i < argc; ++i) {
     const std::string a = argv[i];
+
     auto need = [&](const char* opt) {
       if (i + 1 >= argc) {
         std::cerr << "missing value for " << opt << "\n";
@@ -93,14 +160,16 @@ int main(int argc, char** argv) {
       return std::string(argv[++i]);
     };
 
-    if (a == "--start")
-      start_station = need("--start");
-    else if (a == "--end")
-      end_station = need("--end");
-    else if (a == "--start-node")
-      start_node = std::stoi(need("--start-node"));
-    else if (a == "--end-node")
-      end_node = std::stoi(need("--end-node"));
+    if (a == "--start") start_station = need("--start");
+    else if (a == "--end") end_station = need("--end");
+    else if (a == "--start-node") start_node = std::stoi(need("--start-node"));
+    else if (a == "--end-node") end_node = std::stoi(need("--end-node"));
+
+    else if (a == "--vehicles") vehicles = std::stoi(need("--vehicles"));
+    else if (a == "--seed") seed = (uint64_t)std::stoull(need("--seed"));
+    else if (a == "--sim-sec") sim_sec = std::stoi(need("--sim-sec"));
+    else if (a == "--spawn-interval-ms") spawn_interval_ms = std::stoi(need("--spawn-interval-ms"));
+
     else {
       std::cerr << "unknown option: " << a << "\n";
       print_usage();
@@ -108,9 +177,23 @@ int main(int argc, char** argv) {
     }
   }
 
+  if (vehicles <= 0) {
+    std::cerr << "--vehicles must be > 0\n";
+    return 2;
+  }
+  if (sim_sec <= 0) {
+    std::cerr << "--sim-sec must be > 0\n";
+    return 2;
+  }
+  if (spawn_interval_ms < 0) {
+    std::cerr << "--spawn-interval-ms must be >= 0\n";
+    return 2;
+  }
+
   std::unordered_map<std::string, StationInfo> stations;
   sim::World w = load_world(in_json, stations);
 
+  // resolve single-path station -> node if provided
   if (start_node < 0 && !start_station.empty()) {
     auto it = stations.find(start_station);
     if (it != stations.end()) start_node = it->second.node_id;
@@ -120,31 +203,75 @@ int main(int argc, char** argv) {
     if (it != stations.end()) end_node = it->second.node_id;
   }
 
-  if (start_node < 0 || end_node < 0) {
-    std::cerr << "start/end not resolved. (stations in json: " << stations.size() << ")\n";
-    print_usage();
-    return 2;
-  }
-
-  // A* on overlay(decision nodes), output is original edge_id list.
+  // PathFinder (overlay + A*)
   sim::PathFinder pf(w);
-  std::vector<int> route = pf.find_path_edges_astar_overlay(start_node, end_node);
-  if (route.empty() && start_node != end_node) {
-    std::cerr << "no path found: start_node=" << start_node << " end_node=" << end_node << "\n";
-    return 3;
+
+  // candidate nodes for random pairs (multi vehicles)
+  std::vector<int> cand_nodes = build_candidate_nodes(w, stations);
+  std::mt19937_64 rng(seed);
+
+  // build ohts
+  w.ohts.clear();
+  w.ohts.resize((size_t)vehicles);
+
+  for (int i = 0; i < vehicles; ++i) {
+    int s = start_node;
+    int t = end_node;
+
+    if (vehicles > 1 || (start_node < 0 || end_node < 0)) {
+      // multi mode: random start/goal unless explicit nodes are provided for single
+      // (확장성: 추후 parking/회피는 여기서 start를 edge-mid로도 설정 가능)
+      do {
+        s = pick_node(rng, cand_nodes);
+        t = pick_node(rng, cand_nodes);
+      } while (s == t);
+    } else {
+      // single mode requires resolved start/end
+      if (s < 0 || t < 0) {
+        std::cerr << "start/end not resolved.\n";
+        print_usage();
+        return 2;
+      }
+    }
+
+    std::vector<int> route = pf.find_path_edges_astar_overlay(s, t);
+    if (route.empty() && s != t) {
+      // 실패하면 몇 번 재시도 (그래프가 분리돼 있을 수 있음)
+      bool ok = false;
+      for (int retry = 0; retry < 8 && !ok; ++retry) {
+        int rs = pick_node(rng, cand_nodes);
+        int rt = pick_node(rng, cand_nodes);
+        if (rs == rt) continue;
+        route = pf.find_path_edges_astar_overlay(rs, rt);
+        if (!route.empty()) {
+          s = rs;
+          t = rt;
+          ok = true;
+        }
+      }
+      if (!ok) {
+        std::cerr << "no path for oht " << i << " (graph disconnected?)\n";
+        return 3;
+      }
+    }
+
+    sim::Oht o;
+    o.id = i;
+    o.v_mps = 1.0;
+    o.route_edges = std::move(route);
+    o.route_idx = 0;
+    w.ohts[(size_t)i] = std::move(o);
   }
-
-  sim::Oht o;
-  o.id = 0;
-  o.v_mps = 1.0;
-  o.route_edges = std::move(route);
-
-  w.ohts.resize(1);
-  w.ohts[0] = std::move(o);
 
   sim::Engine eng(std::move(w));
   eng.set_log_path(out_log);
-  eng.schedule_spawn(0, 0);
-  eng.run(60LL * 1'000'000'000LL);
+
+  const int64_t spawn_dt_ns = (int64_t)spawn_interval_ms * 1'000'000LL;
+  for (int i = 0; i < vehicles; ++i) {
+    const int64_t t_ns = (spawn_dt_ns == 0) ? 0 : (int64_t)i * spawn_dt_ns;
+    eng.schedule_spawn(t_ns, i);
+  }
+
+  eng.run((int64_t)sim_sec * 1'000'000'000LL);
   return 0;
 }
