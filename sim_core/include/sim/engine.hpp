@@ -22,6 +22,10 @@ public:
     push({t_ns, next_seq_++, EventType::SpawnOht, oht_id, -1});
   }
 
+  void set_stats_output(bool /*enabled*/) {}
+
+  void set_verbose_events(bool /*enabled*/) {}
+
   void run(int64_t end_time_ns);
 
 private:
