@@ -93,7 +93,7 @@ def main() -> int:
     masks = heuristic_masks(img, thresholds)
 
     # skeletonize track
-    track = masks.get("track_green", np.zeros(img.shape[:2], dtype=bool)).astype(np.uint8)
+    track = (masks.get("track_green", np.zeros(img.shape[:2], dtype=bool)) | masks.get("split_red", np.zeros(img.shape[:2], dtype=bool)) | masks.get("merge_purple", np.zeros(img.shape[:2], dtype=bool)) | masks.get("station_blue", np.zeros(img.shape[:2], dtype=bool))).astype(np.uint8)
     sk = zhang_suen_thinning(track)
 
     nodes, edges = _extract_graph_from_skeleton(sk)
