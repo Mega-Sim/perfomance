@@ -35,16 +35,15 @@ def parse_dxf(path: Path):
     while i < len(c)-1:
         code=c[i].strip(); val=c[i+1].strip(); i+=2
         if code=="0" and val=="SECTION":
-            if i+1 < len(c) and c[i].strip()=="2":
-                sec=c[i+1].strip()
-                in_entities = (sec=="ENTITIES")
-            continue
-        if code=="0" and val=="ENDSEC":
-            in_entities=False; continue
+            if i+1 < len(c) and c[i].strip()=="2" and c[i+1].strip()=="ENTITIES":
+                in_entities=True
         if not in_entities:
             continue
         if code=="0":
-            flush(); cur=val; continue
+            if val in ("LINE","ARC","TEXT"):
+                flush(); cur=val; ent={}
+            else:
+                flush(); cur=None; ent={}
         if cur=="LINE":
             if code=="10": ent["x1"]=float(val)
             elif code=="20": ent["y1"]=float(val)
@@ -59,641 +58,485 @@ def parse_dxf(path: Path):
         elif cur=="TEXT":
             if code=="10": ent["x"]=float(val)
             elif code=="20": ent["y"]=float(val)
-            elif code=="1": ent["text"]=val
+            elif code=="1": ent["t"]=val
     flush()
     return lines, arcs, texts
 
+def dist(a,b):
+    return math.hypot(a[0]-b[0], a[1]-b[1])
+
+def seg_len(p,q):
+    return dist(p,q)
+
+def point_on_segment(p,a,b,eps=EPS_ON):
+    # p가 선분 ab 위에 있는지 (거리 + 범위)
+    ax,ay=a; bx,by=b; px,py=p
+    vx=bx-ax; vy=by-ay
+    wx=px-ax; wy=py-ay
+    vv=vx*vx+vy*vy
+    if vv==0: return False
+    t=(wx*vx+wy*vy)/vv
+    if t<0-eps or t>1+eps: return False
+    cx=ax+t*vx; cy=ay+t*vy
+    return dist((px,py),(cx,cy))<=eps
+
 def arc_endpoints(arc):
+    cx,cy,r,a0,a1 = arc["cx"],arc["cy"],arc["r"],math.radians(arc["a0"]),math.radians(arc["a1"])
+    p0=(cx+r*math.cos(a0), cy+r*math.sin(a0))
+    p1=(cx+r*math.cos(a1), cy+r*math.sin(a1))
+    return p0,p1
+
+def sample_arc_points(arc, n=ARC_SAMPLE_N):
     cx,cy,r=arc["cx"],arc["cy"],arc["r"]
     a0=math.radians(arc["a0"]); a1=math.radians(arc["a1"])
-    return (cx+r*math.cos(a0), cy+r*math.sin(a0)), (cx+r*math.cos(a1), cy+r*math.sin(a1))
+    # DXF ARC는 CCW로 a0->a1; a1<a0면 wrap
+    if a1 < a0:
+        a1 += 2*math.pi
+    ts=np.linspace(a0,a1,n)
+    pts=[(cx+r*math.cos(t), cy+r*math.sin(t)) for t in ts]
+    return pts
 
-def ccw_sweep_deg(a0, a1):
-    s = (a1 - a0) % 360.0
-    if s <= 1e-9:
-        s = 360.0
+def polyline_len(pts):
+    s=0.0
+    for i in range(len(pts)-1):
+        s += dist(pts[i], pts[i+1])
     return s
 
-def point_seg_distance(px, py, ax, ay, bx, by):
-    vx = bx - ax; vy = by - ay
-    wx = px - ax; wy = py - ay
-    vv = vx*vx + vy*vy
-    if vv == 0:
-        return math.hypot(px-ax, py-ay), 0.0, (ax, ay)
-    t = (wx*vx + wy*vy)/vv
-    t = max(0.0, min(1.0, t))
-    qx = ax + t*vx; qy = ay + t*vy
-    return math.hypot(px-qx, py-qy), t, (qx, qy)
+def segment_intersection(a,b,c,d):
+    # 간단한 2D 선분 교차(끝점 제외 포함)
+    def ccw(p,q,r):
+        return (r[1]-p[1])*(q[0]-p[0]) > (q[1]-p[1])*(r[0]-p[0])
+    return (ccw(a,c,d) != ccw(b,c,d)) and (ccw(a,b,c) != ccw(a,b,d))
 
 def build_graph(lines, arcs, texts):
-    arc_pts=[]
-    arc_edges=[]
-    for a in arcs:
-        p0,p1=arc_endpoints(a)
-        arc_pts.extend([p0,p1])
-        arc_edges.append((p0,p1,a))
+    # 1) station nodes: TEXT 중 "station" 포함
+    station_nodes=[]
+    for t in texts:
+        s=t.get("t","").lower()
+        if "station" in s:
+            station_nodes.append((t["x"], t["y"], t["t"]))
 
-    station_points=[(t["x"],t["y"],t.get("text","")) for t in texts if "x" in t and "y" in t and "text" in t]
+    # 2) split points: 선분/호 endpoints + 교차점 + station projection
+    #    - simplify: line-line 교차만 처리 (ARC는 endpoint 연결만)
+    pts=set()
+    for ln in lines:
+        pts.add(nk((ln["x1"],ln["y1"])))
+        pts.add(nk((ln["x2"],ln["y2"])))
+    for ac in arcs:
+        p0,p1=arc_endpoints(ac)
+        pts.add(nk(p0)); pts.add(nk(p1))
 
-    def split_points_for_line(p1,p2):
-        pts=[p1,p2]
-        for ap in arc_pts:
-            d,t,proj=point_seg_distance(ap[0],ap[1],p1[0],p1[1],p2[0],p2[1])
-            if d <= EPS_ON:
-                pts.append(proj)
-        for sx,sy,_ in station_points:
-            d,t,proj=point_seg_distance(sx,sy,p1[0],p1[1],p2[0],p2[1])
-            if d <= STATION_PROJ_EPS:
-                pts.append(proj)
-        uniq={}
-        for q in pts:
-            uniq[nk(q)] = q
-        vx=p2[0]-p1[0]; vy=p2[1]-p1[1]; vv=vx*vx+vy*vy
-        def param(q):
-            if vv==0: return 0.0
-            return ((q[0]-p1[0])*vx + (q[1]-p1[1])*vy)/vv
-        return sorted(uniq.values(), key=param)
+    # line-line intersections (O(n^2) ok for phase1)
+    lsegs=[((ln["x1"],ln["y1"]),(ln["x2"],ln["y2"])) for ln in lines]
+    for i in range(len(lsegs)):
+        a,b=lsegs[i]
+        for j in range(i+1,len(lsegs)):
+            c,d=lsegs[j]
+            if segment_intersection(a,b,c,d):
+                # compute intersection point (robust enough)
+                x1,y1=a; x2,y2=b; x3,y3=c; x4,y4=d
+                den=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4)
+                if abs(den) < 1e-9:
+                    continue
+                px=((x1*y2-y1*x2)*(x3-x4)-(x1-x2)*(x3*y4-y3*x4))/den
+                py=((x1*y2-y1*x2)*(y3-y4)-(y1-y2)*(x3*y4-y3*x4))/den
+                pts.add(nk((px,py)))
 
+    # station projection: nearest segment endpoint or on-segment projection to snap to graph
+    # (간단 버전) station point 자체를 node로 추가
+    for sx,sy,name in station_nodes:
+        pts.add(nk((sx,sy)))
+
+    # 3) adjacency: split each LINE by all points on it
+    adj=collections.defaultdict(set)
     edge_list=[]
-    for l in lines:
-        p1=(l["x1"],l["y1"]); p2=(l["x2"],l["y2"])
-        splits=split_points_for_line(p1,p2)
-        for a,b in zip(splits, splits[1:]):
-            if math.hypot(b[0]-a[0], b[1]-a[1]) < 1e-6:
-                continue
-            dx=b[0]-a[0]; dy=b[1]-a[1]
-            if abs(dy) < 1e-6: kind="H"
-            elif abs(dx) < 1e-6: kind="V"
-            else: kind="D"
-            edge_list.append({"src":"LINE","u":nk(a),"v":nk(b),"kind":kind,
-                              "geom":{"p1":(a[0],a[1]),"p2":(b[0],b[1])}})
+    by_ends=collections.defaultdict(list)  # for quick search
+    eid=0
 
-    # ARC: endpoint끼리 1 edge (새 edge 추가 금지) + 원래 ARC 파라미터 저장
-    for p0,p1,a in arc_edges:
+    def add_edge(u,v,kind="L", geom=None):
+        nonlocal eid
+        if u==v: return
+        edge={"id":eid,"u":u,"v":v,"kind":kind}
+        if geom is not None:
+            edge["geom"]=geom
+        edge_list.append(edge)
+        adj[u].add(v); adj[v].add(u)
+        by_ends[(u,v)].append(eid); by_ends[(v,u)].append(eid)
+        eid+=1
+
+    pts_list=[(p[0],p[1]) for p in pts]
+
+    # helper: points on line segment
+    for ln in lines:
+        a=(ln["x1"],ln["y1"]); b=(ln["x2"],ln["y2"])
+        on=[]
+        for p in pts_list:
+            if point_on_segment(p,a,b,eps=1e-1):  # DXF scale tolerance
+                on.append(p)
+        # sort along t
+        ax,ay=a; bx,by=b
+        vx=bx-ax; vy=by-ay
+        vv=vx*vx+vy*vy if (vx*vx+vy*vy)!=0 else 1.0
+        on.sort(key=lambda p: ((p[0]-ax)*vx+(p[1]-ay)*vy)/vv)
+        for i in range(len(on)-1):
+            u=nk(on[i]); v=nk(on[i+1])
+            add_edge(u,v,kind="L",geom={"type":"LINE","a":on[i],"b":on[i+1]})
+
+    # 4) ARC: endpoints connect as single curved edge (no splitting by intersections here)
+    for ac in arcs:
+        p0,p1=arc_endpoints(ac)
         u=nk(p0); v=nk(p1)
-        edge_list.append({"src":"ARC","u":u,"v":v,"kind":"A",
-                          "geom":{"cx":a["cx"],"cy":a["cy"],"r":a["r"],
-                                  "a0":a["a0"],"a1":a["a1"],
-                                  "p0":(p0[0],p0[1]),"p1":(p1[0],p1[1])}})
+        pts_curve=sample_arc_points(ac, n=ARC_SAMPLE_N)
+        add_edge(u,v,kind="A",geom={"type":"ARC","cx":ac["cx"],"cy":ac["cy"],"r":ac["r"],
+                                    "a0":ac["a0"],"a1":ac["a1"],"pts":pts_curve})
 
-    station_nodes={}
-    for sx,sy,name in station_points:
-        best=None
-        for l in lines:
-            p1=(l["x1"],l["y1"]); p2=(l["x2"],l["y2"])
-            d,t,proj=point_seg_distance(sx,sy,p1[0],p1[1],p2[0],p2[1])
-            if best is None or d < best[0]:
-                best=(d,proj)
-        station_nodes[name]=nk(best[1])
+    # station mapping: nearest node id (same as station point snap)
+    station_map={}
+    for sx,sy,name in station_nodes:
+        station_map[name]=nk((sx,sy))
 
-    adj=collections.defaultdict(list)
-    by_ends=collections.defaultdict(list)
-    for eid,e in enumerate(edge_list):
-        e["id"]=eid
-        adj[e["u"]].append((e["v"], eid))
-        adj[e["v"]].append((e["u"], eid))
-        by_ends[frozenset((e["u"],e["v"]))].append(eid)
+    return edge_list, adj, by_ends, station_map
 
-    return edge_list, adj, by_ends, station_nodes
+def angle(p,q,r):
+    # angle at q from qp to qr in [-pi,pi]
+    a=(p[0]-q[0], p[1]-q[1]); b=(r[0]-q[0], r[1]-q[1])
+    aa=math.hypot(*a); bb=math.hypot(*b)
+    if aa*bb==0: return 0.0
+    dot=(a[0]*b[0]+a[1]*b[1])/(aa*bb)
+    dot=max(-1,min(1,dot))
+    cross=a[0]*b[1]-a[1]*b[0]
+    return math.atan2(cross, dot)
 
-def build_embedding(adj):
-    emb={}
-    for u, lst in adj.items():
-        uniq=[]; seen=set()
-        for v,_ in lst:
-            if v not in seen:
-                seen.add(v); uniq.append(v)
-        def ang(v):
-            return math.atan2(v[1]-u[1], v[0]-u[0])
-        uniq.sort(key=ang)  # CCW
-        emb[u]=uniq
-    return emb
-
-def next_halfedge(u,v,emb):
-    neigh=emb[v]
-    if len(neigh)==1:
-        return None
-    idx=neigh.index(u)
-    w=neigh[(idx-1)%len(neigh)]  # right-face
-    return (v,w)
-
-def enumerate_faces(emb):
-    used=set()
-    faces=[]
-    for u in emb:
-        for v in emb[u]:
-            he=(u,v)
-            if he in used:
-                continue
-            cycle=[]
-            cur=he
-            while True:
-                if cur in used:
-                    break
-                used.add(cur)
-                cycle.append(cur[0])
-                nxt=next_halfedge(cur[0],cur[1],emb)
-                if nxt is None:
-                    cycle=[]; break
-                cur=nxt
-                if cur==he:
-                    cycle.append(cur[0])
-                    break
-            if len(cycle)>=4 and cycle[0]==cycle[-1]:
-                poly=cycle[:-1]
-                area=0.0
-                for i in range(len(poly)):
-                    x1,y1=poly[i]; x2,y2=poly[(i+1)%len(poly)]
-                    area += x1*y2 - x2*y1
-                area*=0.5
-                faces.append({"poly":poly,"area":area})
-    return faces
-
-def get_edge_id(by_ends, edge_list, a,b):
-    lst=by_ends.get(frozenset((a,b)),[])
-    if not lst:
-        return None
-    if len(lst)==1:
-        return lst[0]
-    for eid in lst:
-        if edge_list[eid]["src"]=="LINE":
-            return eid
-    return lst[0]
-
-def outer_loop_cw_fixed(edge_list, adj, by_ends):
-    emb=build_embedding(adj)
-    faces=enumerate_faces(emb)
-    outer=max(faces, key=lambda f: abs(f["area"]))
-    poly=outer["poly"]
-    if outer["area"]>0:
-        poly=list(reversed(poly))  # CW
-    fixed={}
+def polygon_area(poly):
+    # signed area
+    s=0.0
     for i in range(len(poly)):
-        a=poly[i]; b=poly[(i+1)%len(poly)]
-        eid=get_edge_id(by_ends, edge_list, a,b)
-        if eid is None:
-            continue
-        fixed[eid]=a
-    return fixed, poly
+        x1,y1=poly[i]
+        x2,y2=poly[(i+1)%len(poly)]
+        s += x1*y2-x2*y1
+    return 0.5*s
 
-def unit(v):
-    n=np.linalg.norm(v)
-    if n<1e-12:
-        return np.array([0.0,0.0])
-    return v/n
-
-def angle_deg(u,v):
-    u=unit(u); v=unit(v)
-    dot=float(np.clip(np.dot(u,v),-1,1))
-    return math.degrees(math.acos(dot))
-
-def tail_head(edge_list, eid, val):
-    e=edge_list[eid]; u,v=e["u"],e["v"]
-    return (u,v) if val==0 else (v,u)
-
-def set_dir(assign, edge_list, eid, tail):
-    u,v=edge_list[eid]["u"], edge_list[eid]["v"]
-    if tail==u: assign[eid]=0
-    elif tail==v: assign[eid]=1
-    else: raise ValueError("tail not endpoint")
-
-def edge_dir_at_node(edge_list, eid, val, node):
-    t,h=tail_head(edge_list,eid,val)
-    if t==node: return "out"
-    if h==node: return "in"
-    return None
-
-def build_incident(adj):
-    inc=collections.defaultdict(list)
-    for u,lst in adj.items():
-        for v,eid in lst:
-            inc[u].append(eid)
-    return inc
-
-def classify_deg3(edge_list, inc, node):
-    eids=inc[node]
-    vecs=[]
-    for eid in eids:
-        u,v=edge_list[eid]["u"],edge_list[eid]["v"]
-        other = v if u==node else u
-        vecs.append((eid, unit(np.array([other[0]-node[0], other[1]-node[1]],dtype=float))))
-    best=-1; pair=None
-    for i in range(3):
-        for j in range(i+1,3):
-            d=abs(float(np.dot(vecs[i][1], vecs[j][1])))
-            if d>best:
-                best=d; pair=(vecs[i][0], vecs[j][0])
-    main1,main2=pair
-    branch=[eid for eid in eids if eid not in pair][0]
-    return (main1,main2,branch)
-
-def node_counts(edge_list, inc, deg, assign, node):
-    cin=0; cout=0; un=[]
-    for eid in inc[node]:
-        if eid in assign:
-            d=edge_dir_at_node(edge_list,eid,assign[eid],node)
-            if d=="in": cin+=1
-            elif d=="out": cout+=1
-        else:
-            un.append(eid)
-    return cin,cout,un
-
-def check_node_feasible(edge_list, inc, deg, assign, node):
-    cin,cout,un=node_counts(edge_list,inc,deg,assign,node)
-    d=deg[node]
-    if d==2:
-        if cin>1 or cout>1: return False
-        if cin+len(un) < 1 or cout+len(un) < 1: return False
-        if len(un)==0 and not (cin==1 and cout==1): return False
-    elif d==3:
-        if cin>2 or cout>2: return False
-        if cin+len(un) < 1 or cout+len(un) < 1: return False
-        if len(un)==0 and not ((cin==1 and cout==2) or (cin==2 and cout==1)): return False
-    return True
-
-def turn_angle_ok(edge_list, inc, deg, deg3_info, assign, node):
-    if deg[node]!=3:
-        return True
-    cin,cout,un=node_counts(edge_list,inc,deg,assign,node)
-    if un:
-        return True
-    m1,m2,branch=deg3_info[node]
-    d1=edge_dir_at_node(edge_list,m1,assign[m1],node)
-    d2=edge_dir_at_node(edge_list,m2,assign[m2],node)
-    if d1==d2:
-        return False
-    in_me = m1 if d1=="in" else m2
-    out_me = m1 if d1=="out" else m2
-
-    t_in,h_in = tail_head(edge_list,in_me,assign[in_me])
-    other = t_in  # h_in==node
-    v_in = np.array([node[0]-other[0], node[1]-other[1]],dtype=float)
-
-    t_out,h_out = tail_head(edge_list,out_me,assign[out_me])
-    other2 = h_out # t_out==node
-    v_out = np.array([other2[0]-node[0], other2[1]-node[1]],dtype=float)
-
-    tb,hb = tail_head(edge_list,branch,assign[branch])
-    if tb==node:
-        other3 = hb
-        v_bout = np.array([other3[0]-node[0], other3[1]-node[1]],dtype=float)
-        ang=angle_deg(v_in, v_bout)
-    else:
-        other3 = tb
-        v_bin = np.array([node[0]-other3[0], node[1]-other3[1]],dtype=float)
-        ang=angle_deg(v_bin, v_out)
-    return ang <= 95
-
-def propagate(edge_list, adj, inc, deg, deg3_info, assign):
-    queue=collections.deque(inc.keys())
-    inq=set(queue)
-    while queue:
-        node=queue.popleft(); inq.discard(node)
-
-        if not check_node_feasible(edge_list,inc,deg,assign,node):
-            return False, assign
-
-        if deg[node]==2:
-            cin,cout,un=node_counts(edge_list,inc,deg,assign,node)
-            if len(un)==1:
-                eid=un[0]
-                u,v=edge_list[eid]["u"], edge_list[eid]["v"]
-                other = v if u==node else u
-                if cin==1 and cout==0:
-                    set_dir(assign,edge_list,eid,node)
-                elif cout==1 and cin==0:
-                    set_dir(assign,edge_list,eid,other)
-                if eid in assign:
-                    for n2 in (u,v):
-                        if n2 not in inq:
-                            queue.append(n2); inq.add(n2)
-
-        elif deg[node]==3:
-            m1,m2,_=deg3_info[node]
-
-            if m1 in assign and m2 not in assign:
-                d=edge_dir_at_node(edge_list,m1,assign[m1],node)
-                u,v=edge_list[m2]["u"], edge_list[m2]["v"]
-                other = v if u==node else u
-                if d=="in": set_dir(assign,edge_list,m2,node)
-                else:       set_dir(assign,edge_list,m2,other)
-                for n2 in (u,v):
-                    if n2 not in inq:
-                        queue.append(n2); inq.add(n2)
-
-            elif m2 in assign and m1 not in assign:
-                d=edge_dir_at_node(edge_list,m2,assign[m2],node)
-                u,v=edge_list[m1]["u"], edge_list[m1]["v"]
-                other = v if u==node else u
-                if d=="in": set_dir(assign,edge_list,m1,node)
-                else:       set_dir(assign,edge_list,m1,other)
-                for n2 in (u,v):
-                    if n2 not in inq:
-                        queue.append(n2); inq.add(n2)
-
-            if m1 in assign and m2 in assign:
-                if edge_dir_at_node(edge_list,m1,assign[m1],node)==edge_dir_at_node(edge_list,m2,assign[m2],node):
-                    return False, assign
-
-            cin,cout,un=node_counts(edge_list,inc,deg,assign,node)
-            if len(un)==1:
-                eid=un[0]
-                u,v=edge_list[eid]["u"], edge_list[eid]["v"]
-                other = v if u==node else u
-                if cin==0 or cout==2:
-                    set_dir(assign,edge_list,eid,other) # incoming
-                elif cout==0 or cin==2:
-                    set_dir(assign,edge_list,eid,node)  # outgoing
-                if eid in assign:
-                    for n2 in (u,v):
-                        if n2 not in inq:
-                            queue.append(n2); inq.add(n2)
-
-            if not turn_angle_ok(edge_list,inc,deg,deg3_info,assign,node):
-                return False, assign
-
-        if not check_node_feasible(edge_list,inc,deg,assign,node):
-            return False, assign
-
-    return True, assign
-
-def kosaraju_scc(nodes, edges):
-    dadj=collections.defaultdict(list)
-    radj=collections.defaultdict(list)
-    for t,h in edges:
-        dadj[t].append(h)
-        radj[h].append(t)
-    visited=set(); order=[]
-    sys.setrecursionlimit(10000)
-    def dfs(u):
-        visited.add(u)
-        for v in dadj[u]:
-            if v not in visited:
-                dfs(v)
-        order.append(u)
-    for n in nodes:
-        if n not in visited:
-            dfs(n)
-    visited=set()
-    cid=0
-    def rdfs(u):
-        visited.add(u)
-        for v in radj[u]:
-            if v not in visited:
-                rdfs(v)
-    for u in reversed(order):
-        if u not in visited:
-            cid+=1
-            rdfs(u)
-    return cid
-
-def station_reachability_score(station_nodes, edges):
-    dadj=collections.defaultdict(list)
-    for t,h in edges:
-        dadj[t].append(h)
-    st=list(station_nodes.values())
-    total=0
-    for src in st:
-        q=collections.deque([src]); vis={src}
-        while q:
-            u=q.popleft()
-            for v in dadj[u]:
-                if v not in vis:
-                    vis.add(v); q.append(v)
-        total += sum(1 for dst in st if dst in vis)
-    return total
+def find_outer_loop(adj):
+    # 매우 단순한 outer loop 추정: (x+y) 최대 노드에서 시작하여 left-hand rule로 cycle 탐색
+    nodes=list(adj.keys())
+    start=max(nodes, key=lambda n:(n[0],n[1]))
+    # pick initial neighbor with smallest angle from +x axis
+    neigh=list(adj[start])
+    if not neigh:
+        return []
+    # choose neighbor with smallest atan2
+    neigh.sort(key=lambda v: math.atan2(v[1]-start[1], v[0]-start[0]))
+    cur=start; prev=neigh[0]
+    loop=[start]
+    for _ in range(20000):
+        loop.append(prev)
+        # choose next at prev with maximal right turn (CW)
+        cand=list(adj[prev])
+        if cur in cand:
+            cand.remove(cur)
+        if not cand:
+            break
+        # current direction: prev->cur ? actually we traveled cur->prev
+        # want choose next to make CW hugging outside => choose smallest signed angle (right turn)
+        def score(nxt):
+            # angle from (cur->prev) to (prev->nxt)
+            a=(prev[0]-cur[0], prev[1]-cur[1])
+            b=(nxt[0]-prev[0], nxt[1]-prev[1])
+            aa=math.atan2(a[1],a[0])
+            bb=math.atan2(b[1],b[0])
+            d=bb-aa
+            while d<=-math.pi: d+=2*math.pi
+            while d> math.pi: d-=2*math.pi
+            return d
+        cand.sort(key=score) # most negative first (right)
+        nxt=cand[0]
+        cur,prev=prev,nxt
+        if prev==start:
+            break
+        if len(loop)>3 and prev in loop[:-1]:
+            break
+    # ensure cycle
+    if loop and loop[-1]==start:
+        loop=loop[:-1]
+    return loop
 
 def solve(edge_list, adj, by_ends, station_nodes):
-    inc=build_incident(adj)
-    deg={n: len(inc[n]) for n in inc}
-    deg3_nodes=[n for n in inc if deg[n]==3]
-    deg3_info={n: classify_deg3(edge_list,inc,n) for n in deg3_nodes}
+    # edge 방향 assign: 0=as-is (u->v), 1=flip (v->u)
+    # We build undirected edges list but need directed edges for sim.
+    # 규칙:
+    #  - 외곽 loop는 CW 방향 고정
+    #  - 분기점에서는 일관되게 방향 전파
+    #  - station은 경로 가능하도록 연결 강제 (간단: station node degree>=1 유지)
+    # 간단화: greedy propagation
 
-    fixed_outer, _ = outer_loop_cw_fixed(edge_list, adj, by_ends)
-    diag_eids=[e["id"] for e in edge_list if e["kind"]=="D"]  # 4개 예상
+    assign={e["id"]:0 for e in edge_list}
 
-    best=None
-    best_bits=None
+    # 1) outer loop 추정 및 CW로 맞추기
+    loop=find_outer_loop(adj)
+    bits={}
+    if len(loop)>=3:
+        # compute signed area; CW면 area<0 (좌표계에 따라 다를 수 있음)
+        area=polygon_area(loop)
+        cw = area < 0
+        # want CW True. if not cw, reverse loop traversal
+        if not cw:
+            loop=list(reversed(loop))
+        # apply direction along loop: n[i] -> n[i+1]
+        for i in range(len(loop)):
+            u=loop[i]; v=loop[(i+1)%len(loop)]
+            # find edge id connecting u-v (could be multiple; pick first)
+            eids = by_ends.get((u,v), [])
+            if not eids:
+                continue
+            eid=eids[0]
+            e=edge_list[eid]
+            # e stores u,v endpoints in undirected meaning; assign 0 means e.u->e.v
+            if e["u"]==u and e["v"]==v:
+                assign[eid]=0
+            elif e["u"]==v and e["v"]==u:
+                assign[eid]=1
+            bits[eid]=1
 
-    def solve_with_fixed(bits):
-        assign={}
-        for eid,tail in fixed_outer.items():
-            set_dir(assign,edge_list,eid,tail)
-        for i,eid in enumerate(diag_eids):
-            assign[eid]=(bits>>i)&1
+    # 2) propagate from already-directed edges outward with BFS
+    #    If a node has one incoming and remaining undirected edges, set them outgoing etc.
+    #    We define for each node: outgoing/incoming based on assigned edges.
+    def edge_dir(eid):
+        e=edge_list[eid]
+        if assign[eid]==0: return e["u"],e["v"]
+        else: return e["v"],e["u"]
 
-        ok, assign2 = propagate(edge_list,adj,inc,deg,deg3_info,assign)
-        if not ok:
-            return None
+    # map node -> incident edge ids
+    inc=collections.defaultdict(list)
+    for e in edge_list:
+        inc[e["u"]].append(e["id"])
+        inc[e["v"]].append(e["id"])
 
-        all_eids=[e["id"] for e in edge_list]
-        edge_score={eid: deg[edge_list[eid]["u"]]+deg[edge_list[eid]["v"]] for eid in all_eids}
+    q=collections.deque()
+    for n in inc:
+        q.append(n)
 
-        def pick_unassigned(a):
-            un=[eid for eid in all_eids if eid not in a]
-            if not un: return None
-            un.sort(key=lambda eid: (-edge_score[eid], eid))
-            return un[0]
+    changed=True
+    it=0
+    while changed and it<20000:
+        it+=1
+        changed=False
+        for _ in range(len(q)):
+            n=q.popleft()
+            eids=inc[n]
+            # classify already oriented wrt n
+            out=[]; inn=[]; und=[]
+            for eid in eids:
+                u,v=edge_dir(eid)
+                # if eid is directed? always directed by assign, but some are still "unknown" conceptually
+                # We treat unknown as those not in bits map and not yet visited; but assign exists anyway.
+                # We'll use bits as "fixed" set; others can still flip.
+                if eid in bits:
+                    if u==n: out.append(eid)
+                    elif v==n: inn.append(eid)
+                else:
+                    und.append(eid)
+            # heuristic:
+            # if node has at least one fixed incoming and has und edges, set all und edges as outgoing (n->neighbor)
+            if inn and und:
+                for eid in und:
+                    e=edge_list[eid]
+                    # set direction n -> other
+                    other = e["v"] if e["u"]==n else e["u"]
+                    if e["u"]==n and e["v"]==other:
+                        assign[eid]=0
+                    elif e["u"]==other and e["v"]==n:
+                        assign[eid]=1
+                    bits[eid]=1
+                    changed=True
+                q.append(n)
+                continue
+            # if node has at least one fixed outgoing and has und edges, set all und edges as incoming (other->n)
+            if out and und:
+                for eid in und:
+                    e=edge_list[eid]
+                    other = e["v"] if e["u"]==n else e["u"]
+                    # set other -> n
+                    if e["u"]==other and e["v"]==n:
+                        assign[eid]=0
+                    elif e["u"]==n and e["v"]==other:
+                        assign[eid]=1
+                    bits[eid]=1
+                    changed=True
+                q.append(n)
+                continue
+            q.append(n)
 
-        calls=0
-        def backtrack(a):
-            nonlocal calls
-            calls+=1
-            if calls>200000:
-                return None
-            ok2, a2 = propagate(edge_list,adj,inc,deg,deg3_info,dict(a))
-            if not ok2:
-                return None
-            un=[eid for eid in all_eids if eid not in a2]
-            if not un:
-                return a2
-            eid=pick_unassigned(a2)
-            u,v=edge_list[eid]["u"],edge_list[eid]["v"]
-            for tail in (u,v):
-                a_try=dict(a2)
-                set_dir(a_try,edge_list,eid,tail)
-                if not check_node_feasible(edge_list,inc,deg,a_try,u) or not check_node_feasible(edge_list,inc,deg,a_try,v):
-                    continue
-                if not turn_angle_ok(edge_list,inc,deg,deg3_info,a_try,u) or not turn_angle_ok(edge_list,inc,deg,deg3_info,a_try,v):
-                    continue
-                res=backtrack(a_try)
-                if res is not None:
-                    return res
-            return None
-        return backtrack(assign2)
+    # scoring (simple)
+    score = len(bits)
 
-    for bits in range(1<<len(diag_eids)):
-        sol=solve_with_fixed(bits)
-        if sol is None:
-            continue
-        edges=[tail_head(edge_list,eid,val) for eid,val in sol.items()]
-        indeg=collections.Counter(); outdeg=collections.Counter()
-        for t,h in edges:
-            outdeg[t]+=1; indeg[h]+=1
-        dead=sum(1 for n in adj if len(adj[n])>1 and (indeg[n]==0 or outdeg[n]==0))
-        reach=station_reachability_score(station_nodes, edges)
-        scc_count=kosaraju_scc(list(adj.keys()), edges)
-        score=(dead, -reach, scc_count)
-        if best is None or score < best[0]:
-            best=(score, sol); best_bits=bits
-
-    if best is None:
-        raise RuntimeError("유효한 단방향 해를 찾지 못했습니다.")
-    return best_bits, best[0], best[1]
-
-def sample_arc_points(cx, cy, r, a0, a1, ccw=True, n=ARC_SAMPLE_N):
-    sweep=ccw_sweep_deg(a0, a1)
-    if ccw:
-        angs=np.linspace(a0, a0+sweep, n)
-    else:
-        angs=np.linspace(a0+sweep, a0, n)
-    pts=[(cx+r*math.cos(math.radians(a)), cy+r*math.sin(math.radians(a))) for a in angs]
-    return pts, (a0 + sweep/2.0)
-
-def tangent_vec(ang_deg, ccw=True):
-    ang=math.radians(ang_deg)
-    # CCW tangent: (-sin, cos); CW tangent: (sin, -cos)
-    if ccw:
-        return np.array([-math.sin(ang), math.cos(ang)], dtype=float)
-    else:
-        return np.array([ math.sin(ang),-math.cos(ang)], dtype=float)
+    return bits, score, assign
 
 def render(edge_list, adj, station_nodes, assign, out_png: Path, arrow_scale=6):
-    kind_color={"H":"tab:orange","V":"tab:green","D":"tab:cyan","A":"tab:purple"}
-    fig, ax = plt.subplots(figsize=(12,6))
+    fig,ax=plt.subplots(figsize=(10,10))
+    # draw edges with geometry
     for e in edge_list:
-        eid=e["id"]
-        t,h=tail_head(edge_list,eid,assign[eid])
+        u=e["u"]; v=e["v"]
+        uu,vv = (u,v) if assign[e["id"]]==0 else (v,u)
+        if e["geom"]["type"]=="LINE":
+            a=e["geom"]["a"]; b=e["geom"]["b"]
+            xs=[a[0],b[0]]; ys=[a[1],b[1]]
+            ax.plot(xs,ys, color="green", lw=2)
+            # arrow at mid
+            mx=(a[0]+b[0])/2; my=(a[1]+b[1])/2
+            dx=(b[0]-a[0]); dy=(b[1]-a[1])
+            if assign[e["id"]]==1:
+                dx=-dx; dy=-dy
+            ax.arrow(mx, my, dx*0.001*arrow_scale, dy*0.001*arrow_scale,
+                     head_width=arrow_scale*2, head_length=arrow_scale*3,
+                     fc="green", ec="green", length_includes_head=True)
+        elif e["geom"]["type"]=="ARC":
+            pts=e["geom"]["pts"]
+            xs=[p[0] for p in pts]; ys=[p[1] for p in pts]
+            ax.plot(xs,ys, color="green", lw=2)
+            # arrow at middle sample
+            mid=len(pts)//2
+            p0=pts[mid-1]; p1=pts[mid+1]
+            dx=(p1[0]-p0[0]); dy=(p1[1]-p0[1])
+            mx=pts[mid][0]; my=pts[mid][1]
+            # if assigned flip, reverse arrow tangent
+            if assign[e["id"]]==1:
+                dx=-dx; dy=-dy
+            ax.arrow(mx, my, dx*0.05, dy*0.05,
+                     head_width=arrow_scale*2, head_length=arrow_scale*3,
+                     fc="green", ec="green", length_includes_head=True)
 
-        if e["src"]=="LINE":
-            ax.plot([t[0],h[0]],[t[1],h[1]],linewidth=2,alpha=0.9,color=kind_color.get(e["kind"],"tab:blue"))
-            mx=(t[0]+h[0])/2; my=(t[1]+h[1])/2
-            dx=h[0]-t[0]; dy=h[1]-t[1]
-            L=math.hypot(dx,dy)
-            if L>1e-6:
-                ux=dx/L; uy=dy/L
-                alen=L*0.12
-                ax.annotate("", xy=(mx+ux*alen*0.5, my+uy*alen*0.5), xytext=(mx-ux*alen*0.5, my-uy*alen*0.5),
-                            arrowprops=dict(arrowstyle="-|>", mutation_scale=arrow_scale, linewidth=1.0, color="black"))
-        else:
-            g=e["geom"]
-            cx,cy,r=float(g["cx"]),float(g["cy"]),float(g["r"])
-            # DXF 기준: start=a0, end=a1, CCW sweep
-            a0=float(g["a0"])%360.0
-            a1=float(g["a1"])%360.0
-            # 본 edge의 '원래' 방향: u(start)->v(end)
-            u=e["u"]; v=e["v"]
-            travel_ccw = (t==u and h==v)
-            pts, mid_ang = sample_arc_points(cx,cy,r,a0,a1,ccw=travel_ccw,n=ARC_SAMPLE_N)
-            ax.plot([p[0] for p in pts],[p[1] for p in pts],linewidth=2,alpha=0.9,color=kind_color["A"])
+    # draw nodes
+    xs=[n[0] for n in adj.keys()]; ys=[n[1] for n in adj.keys()]
+    ax.scatter(xs,ys, s=20, c="red")
 
-            # arrow on arc (tangent)
-            mid_pt=(cx+r*math.cos(math.radians(mid_ang)), cy+r*math.sin(math.radians(mid_ang)))
-            tv=tangent_vec(mid_ang, ccw=travel_ccw)
-            tv=tv/(np.linalg.norm(tv)+1e-12)
-            alen=r*0.12
-            ax.annotate("", xy=(mid_pt[0]+tv[0]*alen, mid_pt[1]+tv[1]*alen),
-                        xytext=(mid_pt[0]-tv[0]*alen*0.2, mid_pt[1]-tv[1]*alen*0.2),
-                        arrowprops=dict(arrowstyle="-|>", mutation_scale=arrow_scale, linewidth=1.0, color="black"))
+    # station nodes
+    for name, p in station_nodes.items():
+        ax.scatter([p[0]],[p[1]], s=40, c="blue", marker="s")
+        ax.text(p[0], p[1], name, fontsize=8)
 
-    xs=[n[0] for n in adj.keys()]
-    ys=[n[1] for n in adj.keys()]
-    ax.scatter(xs,ys,s=10,color="tab:blue",alpha=0.65)
-
-    for name,p in station_nodes.items():
-        ax.text(p[0],p[1],name,fontsize=9,ha="center",va="center")
-
-    ax.set_aspect("equal", adjustable="box")
-    ax.set_title("Directed Graph (Outer CW propagate) — with ORIGINAL ARCs")
-    ax.set_xlabel("X"); ax.set_ylabel("Y")
-    plt.tight_layout()
-    fig.savefig(out_png, dpi=220)
+    ax.set_aspect('equal','box')
+    ax.invert_yaxis()  # CAD y down
+    ax.axis('off')
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=200, bbox_inches="tight")
     plt.close(fig)
+    print(f"[OK] wrote {out_png}")
 
-def dump_graph(edge_list, station_nodes, assign, out_json_path):
-    """
-    sim_core가 읽는 out.json 포맷으로 덤프:
-      - nodes: [{id,x,y}]
-      - edges: [{id,tail,head,length}]
-      - stations: {name:{node_id,x,y}}
-    tail/head는 '방향 그래프(assign)' 기준으로 결정됨.
-    """
-    import json
-    import math
+def dump_graph(edge_list, station_nodes, assign, out_json: Path | str):
+    nodes={}
+    def nid(p):
+        if p not in nodes:
+            nodes[p]=len(nodes)
+        return nodes[p]
 
-    # 1) 노드 수집: edge endpoint (u,v) 좌표를 node로 만든다
-    coord_set = []
+    edges=[]
     for e in edge_list:
-        coord_set.append(e["u"])
-        coord_set.append(e["v"])
-
-    # u/v는 이미 nk()로 round 된 (x,y) 튜플
-    unique_coords = list(dict.fromkeys(coord_set))  # 순서 보존 유니크
-    coord_to_id = {c: i for i, c in enumerate(unique_coords)}
-
-    nodes = [{"id": i, "x": float(c[0]), "y": float(c[1])} for i, c in enumerate(unique_coords)]
-
-    # 2) 엣지 생성: assign[eid]로 tail 결정 (0이면 u->v, 1이면 v->u)
-    edges = []
-    for e in edge_list:
-        eid = e["id"]
-        u = e["u"]
-        v = e["v"]
-
-        # 방향 결정
-        if assign.get(eid, 0) == 0:
-            tail = u
-            head = v
-        else:
-            tail = v
-            head = u
-
-        tail_id = coord_to_id[tail]
-        head_id = coord_to_id[head]
-
-        # 길이 계산
-        if e.get("src") == "ARC":
-            g = e["geom"]
-            r = float(g["r"])
-            a0 = float(g["a0"]) % 360.0
-            a1 = float(g["a1"]) % 360.0
-
-            # ARC의 "원래" 방향은 u(start)->v(end)로 저장돼 있음.
-            # 실제 이동 방향이 u->v면 CCW sweep, v->u면 반대 sweep으로 간주.
-            travel_u_to_v = (tail == u and head == v)
-
-            sweep_deg = ccw_sweep_deg(a0, a1)
-            if not travel_u_to_v:
-                sweep_deg = 360.0 - sweep_deg
-
-            length = (math.radians(sweep_deg) * r)
-        else:
-            # LINE
-            length = math.hypot(head[0] - tail[0], head[1] - tail[1])
-
+        u=e["u"]; v=e["v"]
+        uu,vv = (u,v) if assign[e["id"]]==0 else (v,u)
         edges.append({
-            "id": int(eid),
-            "tail": int(tail_id),
-            "head": int(head_id),
-            "length": float(length),
+            "id": e["id"],
+            "u": nid(uu),
+            "v": nid(vv),
+            "kind": e["kind"],
+            "geom": e["geom"],
         })
 
-    # 3) stations: station_nodes는 name -> nk(coord) 형태
-    stations = {}
-    for name, coord in station_nodes.items():
-        if coord in coord_to_id:
-            nid = coord_to_id[coord]
-            stations[name] = {"node_id": int(nid), "x": float(coord[0]), "y": float(coord[1])}
+    out={
+        "nodes":[{"id":i,"x":p[0],"y":p[1]} for p,i in nodes.items()],
+        "edges":edges,
+        "stations": {name: nid(p) for name,p in station_nodes.items()}
+    }
+    out_json = Path(out_json)
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    print(f"[OK] graph dump -> {out_json}")
 
-    graph_data = {"nodes": nodes, "edges": edges, "stations": stations}
+def render_svg(edge_list, adj, station_nodes, assign, out_svg: Path):
+    # very simple svg renderer for preview
+    xs=[p[0] for p in adj.keys()]
+    ys=[p[1] for p in adj.keys()]
+    if not xs:
+        return
+    minx,maxx=min(xs),max(xs)
+    miny,maxy=min(ys),max(ys)
+    w=maxx-minx; h=maxy-miny
+    pad=50
+    vb=(minx-pad, miny-pad, w+2*pad, h+2*pad)
 
-    with open(out_json_path, "w", encoding="utf-8") as f:
-        json.dump(graph_data, f, indent=2)
+    def tr(p):
+        # keep CAD coords; viewer can invert if needed. We'll not invert for svg.
+        return p
 
-    print(f"[OK] Graph exported: {out_json_path}")
+    lines_out=[]
+    lines_out.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{vb[0]} {vb[1]} {vb[2]} {vb[3]}">')
+    lines_out.append('<rect x="-1e9" y="-1e9" width="2e9" height="2e9" fill="white"/>')
+
+    # edges
+    for e in edge_list:
+        if e["geom"]["type"]=="LINE":
+            a=e["geom"]["a"]; b=e["geom"]["b"]
+            # direction
+            if assign[e["id"]]==1:
+                a,b=b,a
+            lines_out.append(f'<line x1="{a[0]:.1f}" y1="{a[1]:.1f}" x2="{b[0]:.1f}" y2="{b[1]:.1f}" stroke="#00aa00" stroke-width="6" />')
+            # arrow marker (simple triangle)
+            mx=(a[0]+b[0])/2; my=(a[1]+b[1])/2
+            dx=b[0]-a[0]; dy=b[1]-a[1]
+            L=math.hypot(dx,dy) or 1.0
+            ux,uy=dx/L,dy/L
+            size=25
+            px,py=-uy,ux
+            tip=(mx+ux*size, my+uy*size)
+            lft=(mx-ux*size+px*size*0.6, my-uy*size+py*size*0.6)
+            rgt=(mx-ux*size-px*size*0.6, my-uy*size-py*size*0.6)
+            lines_out.append(f'<polygon points="{tip[0]:.1f},{tip[1]:.1f} {lft[0]:.1f},{lft[1]:.1f} {rgt[0]:.1f},{rgt[1]:.1f}" fill="#00aa00"/>')
+        elif e["geom"]["type"]=="ARC":
+            pts=e["geom"]["pts"]
+            if assign[e["id"]]==1:
+                pts=list(reversed(pts))
+            d="M "+ " L ".join([f"{p[0]:.1f},{p[1]:.1f}" for p in pts])
+            lines_out.append(f'<path d="{d}" fill="none" stroke="#00aa00" stroke-width="6"/>')
+            # arrow at middle
+            mid=len(pts)//2
+            p0=pts[mid-1]; p1=pts[mid+1]
+            mx,my=pts[mid]
+            dx=p1[0]-p0[0]; dy=p1[1]-p0[1]
+            L=math.hypot(dx,dy) or 1.0
+            ux,uy=dx/L,dy/L
+            size=25
+            px,py=-uy,ux
+            tip=(mx+ux*size, my+uy*size)
+            lft=(mx-ux*size+px*size*0.6, my-uy*size+py*size*0.6)
+            rgt=(mx-ux*size-px*size*0.6, my-uy*size-py*size*0.6)
+            lines_out.append(f'<polygon points="{tip[0]:.1f},{tip[1]:.1f} {lft[0]:.1f},{lft[1]:.1f} {rgt[0]:.1f},{rgt[1]:.1f}" fill="#00aa00"/>')
+
+    # nodes
+    for p in adj.keys():
+        x,y=tr(p)
+        lines_out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="10" fill="#e74c3c" />')
+
+    # stations
+    for name,p in station_nodes.items():
+        x,y=tr(p)
+        lines_out.append(
+            f'<rect x="{x - 6:.1f}" y="{y - 6:.1f}" width="12" height="12" '
+            f'fill="#3498db" stroke="#2980b9" stroke-width="1" rx="2"/>'
+        )
+        lines_out.append(
+            f'<text x="{x:.1f}" y="{y - 10:.1f}" '
+            f'font-size="9" font-family="sans-serif" text-anchor="middle" '
+            f'fill="#2c3e50">{name}</text>'
+        )
+
+    lines_out.append('</svg>')
+    out_svg.parent.mkdir(parents=True, exist_ok=True)
+    out_svg.write_text("\n".join(lines_out), encoding="utf-8")
+    print(f"[OK] SVG preview -> {out_svg}")
+
+
 def main():
     if len(sys.argv) < 3:
-        print("usage: python build_directed_graph_outer_cw_propagate_curves.py <in.dxf> <out.png> [out.json]")
+        print("usage: python build_graph.py <in.dxf> <out.png> [out.json]")
         return 2
     in_dxf=Path(sys.argv[1])
     out_png=Path(sys.argv[2])
@@ -707,6 +550,10 @@ def main():
 
     if out_json is not None:
         dump_graph(edge_list, station_nodes, assign, out_json)
+
+    # SVG preview 생성 (PNG 경로에서 확장자만 변경)
+    out_svg = out_png.with_suffix('.svg')
+    render_svg(edge_list, adj, station_nodes, assign, out_svg)
 
     # brief stdout (optional)
     diag_eids=[e["id"] for e in edge_list if e["kind"]=="D"]
