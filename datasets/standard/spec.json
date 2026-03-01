@@ -1,0 +1,73 @@
+{
+  "spec_version": "1.1",
+  "dataset": {
+    "paths": {
+      "images_dir": "datasets/standard/images",
+      "graphs_dir": "datasets/standard/graphs",
+      "previews_dir": "datasets/standard/previews",
+      "manifest_path": "datasets/standard/manifest.jsonl",
+      "labels_path_optional": "datasets/standard/labels.jsonl"
+    },
+    "file_naming": {
+      "allowed_extensions": [
+        ".png"
+      ],
+      "recommended_stem_regex": "^[0-9]{4,6}$"
+    }
+  },
+  "image": {
+    "canvas": {
+      "recommended_min_size_px": [
+        256,
+        256
+      ],
+      "recommended_max_size_px": [
+        2048,
+        2048
+      ],
+      "background": {
+        "rgb": [
+          255,
+          255,
+          255
+        ],
+        "tolerance_per_channel": 25,
+        "recommended_background_ratio_min": 0.70
+      }
+    },
+    "track": {
+      "color": {
+        "mode": "green_dominant",
+        "min_g": 120,
+        "min_g_minus_r": 20,
+        "min_g_minus_b": 20
+      }
+    },
+    "node_marker": {
+      "required": true,
+      "shape": "circle dot",
+      "color": {
+        "mode": "red_dominant",
+        "min_r": 140,
+        "min_r_minus_g": 40,
+        "min_r_minus_b": 40
+      }
+    },
+    "station_marker": {
+      "required": false,
+      "shape": "square dot",
+      "color": {
+        "mode": "blue_dominant",
+        "min_b": 140,
+        "min_b_minus_r": 40,
+        "min_b_minus_g": 40
+      }
+    },
+    "direction_marker": {
+      "required": true,
+      "type": "arrow",
+      "color": "same_as_track",
+      "placement_rule": "outside_track"
+    }
+  }
+}
