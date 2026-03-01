@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from graphgen.ai_phase1.color_model import train_model
+from .color_model import train_model
 
 
 def parse_args() -> argparse.Namespace:

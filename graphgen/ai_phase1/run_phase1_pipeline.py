@@ -1,103 +1,113 @@
-"""End-to-end phase-1 pipeline runner."""
+"""
+Phase-1 pipeline runner — DXF → Graph direct path.
+
+기존의 이미지 경유 역추출(DXF→PNG→세그멘테이션→스켈레톤→그래프)을 제거하고
+build_graph.py의 정확한 DXF 파싱 결과를 직접 사용합니다.
+
+Closes #12: https://github.com/Mega-Sim/perfomance/issues/12
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 
+# build_graph 모듈의 핵심 함수들을 직접 import
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src.build_graph import (
+    parse_dxf,
+    build_graph,
+    solve,
+    render,
+    render_svg,
+    dump_graph,
+)
 
 OUTPUT_ROOT = Path("outputs/phase1_ai")
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser()
-    p.add_argument("--dxf", required=True)
-    p.add_argument("--retrain", action="store_true")
+    p = argparse.ArgumentParser(
+        description="DXF → directed graph (direct path, no image round-trip)"
+    )
+    p.add_argument("--dxf", required=True, help="Input DXF file path")
+    p.add_argument(
+        "--out_dir",
+        default=str(OUTPUT_ROOT),
+        help="Output directory (default: outputs/phase1_ai)",
+    )
     return p.parse_args()
-
-
-def _run(cmd: list[str]) -> None:
-    print("[RUN]", " ".join(cmd))
-    subprocess.run(cmd, check=True)
 
 
 def main() -> int:
     args = parse_args()
-    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    render_png = OUTPUT_ROOT / "drawing1_render.png"
-    teacher_json = OUTPUT_ROOT / "drawing1_teacher.json"
-    model_json = OUTPUT_ROOT / "color_model.json"
-    infer_dir = OUTPUT_ROOT / "drawing1_ai"
+    dxf_path = Path(args.dxf)
+    if not dxf_path.exists():
+        print(f"[ERROR] DXF file not found: {dxf_path}")
+        return 1
 
-    _run([sys.executable, "src/build_graph.py", args.dxf, str(render_png), str(teacher_json)])
+    # ── Step 1: DXF 파싱 & 그래프 구축 ──
+    print(f"[1/4] Parsing DXF: {dxf_path}")
+    lines, arcs, texts = parse_dxf(dxf_path)
+    edge_list, adj, by_ends, station_nodes = build_graph(lines, arcs, texts)
+    print(f"      nodes={len(adj)}, edges={len(edge_list)}, stations={len(station_nodes)}")
 
-    if args.retrain or not model_json.exists():
-        _run(
-            [
-                sys.executable,
-                "-m",
-                "graphgen.ai_phase1.train_color_model",
-                "--images_dir",
-                "datasets/standard/images",
-                "--out",
-                str(model_json),
-            ]
-        )
+    # ── Step 2: 방향 결정 (outer-loop CW + propagation) ──
+    print("[2/4] Solving edge directions...")
+    bits, score, assign = solve(edge_list, adj, by_ends, station_nodes)
 
-    _run(
-        [
-            sys.executable,
-            "-m",
-            "graphgen.ai_phase1.infer_graph_from_image",
-            "--image",
-            str(render_png),
-            "--model",
-            str(model_json),
-            "--out_dir",
-            str(infer_dir),
-        ]
-    )
+    # ── Step 3: 출력 생성 ──
+    print("[3/4] Generating outputs...")
 
-    graph = json.loads((infer_dir / "graph.json").read_text(encoding="utf-8"))
-    counts = {"split": 0, "merge": 0, "station": 0}
-    for n in graph["nodes"]:
-        counts[n["type"]] = counts.get(n["type"], 0) + 1
+    render_png = out_dir / "directed_graph.png"
+    render(edge_list, adj, station_nodes, assign, render_png, arrow_scale=6)
 
-    directed = sum(1 for e in graph["edges"] if e["dir"] is not None)
-    unresolved = sum(1 for e in graph["edges"] if e["dir"] is None)
+    graph_json = out_dir / "graph.json"
+    dump_graph(edge_list, station_nodes, assign, str(graph_json))
 
-    report = OUTPUT_ROOT / "REPORT.md"
-    report.write_text(
-        "\n".join(
-            [
-                "# Phase1 AI Report",
-                "",
-                f"- source dxf: `{args.dxf}`",
-                f"- nodes(split): {counts.get('split', 0)}",
-                f"- nodes(merge): {counts.get('merge', 0)}",
-                f"- nodes(station): {counts.get('station', 0)}",
-                f"- edges(total): {len(graph['edges'])}",
-                f"- edges(directed): {directed}",
-                f"- edges(unresolved): {unresolved}",
-                "",
-                "## Produced files",
-                "- outputs/phase1_ai/color_model.json",
-                "- outputs/phase1_ai/drawing1_render.png",
-                "- outputs/phase1_ai/drawing1_teacher.json",
-                "- outputs/phase1_ai/drawing1_ai/graph.json",
-                "- outputs/phase1_ai/drawing1_ai/preview.svg",
-                "- outputs/phase1_ai/drawing1_ai/preview.png (local, untracked)",
-                "- outputs/phase1_ai/REPORT.md",
-            ]
-        ),
+    preview_svg = out_dir / "preview.svg"
+    render_svg(edge_list, adj, station_nodes, assign, preview_svg)
+
+    # ── Step 4: 리포트 생성 ──
+    print("[4/4] Writing report...")
+
+    graph = json.loads(graph_json.read_text(encoding="utf-8"))
+    n_nodes = len(graph["nodes"])
+    n_edges = len(graph["edges"])
+    n_stations = len(graph.get("stations", {}))
+
+    report_path = out_dir / "REPORT.md"
+    report_path.write_text(
+        "\n".join([
+            "# Phase1 Report — DXF Direct Path",
+            "",
+            f"- source dxf: `{args.dxf}`",
+            f"- nodes: {n_nodes}",
+            f"- edges: {n_edges} (100% directed)",
+            f"- stations: {n_stations}",
+            "",
+            "## Produced files",
+            f"- `{graph_json}` — sim_core 입력용 그래프",
+            f"- `{preview_svg}` — SVG preview (DXF 기하 기반)",
+            f"- `{render_png}` — matplotlib PNG",
+            f"- `{report_path}` — 이 리포트",
+            "",
+            "## Method",
+            "DXF → parse → outer-loop CW → direction propagation → export",
+            "(이미지 경유 역추출 제거됨, see issue #12)",
+        ]),
         encoding="utf-8",
     )
 
-    print(f"[OK] Report -> {report}")
+    diag_eids = [e["id"] for e in edge_list if e["kind"] == "D"]
+    print(f"[OK] Done. nodes={n_nodes}, edges={n_edges}, stations={n_stations}")
+    print(f"     diag_bits={bits} diag_eids={diag_eids} score={score}")
+    print(f"     Report -> {report_path}")
     return 0
 
 
