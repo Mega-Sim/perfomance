@@ -51,6 +51,8 @@ def main() -> int:
     green_ratios: list[float] = []
     red_ratios: list[float] = []
     blue_ratios: list[float] = []
+    purple_ratios: list[float] = []
+    black_ratios: list[float] = []
 
     for path in image_paths:
         stem = path.stem
@@ -90,20 +92,37 @@ def main() -> int:
             & ((b - r) >= int(blue_spec["min_b_minus_r"]))
             & ((b - g) >= int(blue_spec["min_b_minus_g"]))
         )
+        purple_mask = (
+            (r >= 120)
+            & (b >= 120)
+            & (g <= 120)
+            & (np.abs(r - b) <= 80)
+            & ((r - g) >= 40)
+            & ((b - g) >= 40)
+        )
+        black_mask = (r <= 60) & (g <= 60) & (b <= 60)
 
         green_ratio = _ratio(green_mask)
         red_ratio = _ratio(red_mask)
         blue_ratio = _ratio(blue_mask)
+        purple_ratio = _ratio(purple_mask)
+        black_ratio = _ratio(black_mask)
+        node_ratio = red_ratio + purple_ratio
 
         green_ratios.append(green_ratio)
         red_ratios.append(red_ratio)
         blue_ratios.append(blue_ratio)
+        purple_ratios.append(purple_ratio)
+        black_ratios.append(black_ratio)
 
         if green_ratio < 0.002:
             _warn(f"{path}: green pixel ratio {green_ratio:.6f} < 0.002")
             warnings += 1
-        if red_ratio < 0.0002:
-            _warn(f"{path}: red pixel ratio {red_ratio:.6f} < 0.0002")
+        if node_ratio < 0.0002:
+            _warn(f"{path}: node pixel ratio (red+purple) {node_ratio:.6f} < 0.0002")
+            warnings += 1
+        if black_ratio < 0.00015:
+            _warn(f"{path}: black arrow pixel ratio {black_ratio:.6f} < 0.00015")
             warnings += 1
 
     summary = {
@@ -112,9 +131,13 @@ def main() -> int:
         "green_ratio_mean": float(np.mean(green_ratios)),
         "red_ratio_mean": float(np.mean(red_ratios)),
         "blue_ratio_mean": float(np.mean(blue_ratios)),
+        "purple_ratio_mean": float(np.mean(purple_ratios)),
+        "black_ratio_mean": float(np.mean(black_ratios)),
         "green_ratio_min": float(np.min(green_ratios)),
         "red_ratio_min": float(np.min(red_ratios)),
         "blue_ratio_min": float(np.min(blue_ratios)),
+        "purple_ratio_min": float(np.min(purple_ratios)),
+        "black_ratio_min": float(np.min(black_ratios)),
     }
     print(json.dumps(summary, ensure_ascii=False))
 
