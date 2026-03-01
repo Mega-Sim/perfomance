@@ -28,3 +28,9 @@ python src/build_graph.py examples/Drawing1.dxf outputs/out.png outputs/out.json
 ## 현재 범위
 - Layout/Graph Builder 까지 구현 완료
 - Event Engine / Traffic / Scheduler / Multi-OHT는 아직 포함되지 않음
+
+## Phase1: AI graph extraction (directed from black arrows)
+```bash
+pip install -r graphgen/requirements.txt
+python -m graphgen.ai_phase1.run_phase1_pipeline --dxf examples/Drawing1.dxf --retrain
+```

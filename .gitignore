@@ -1,1 +1,4 @@
-outputs/
+outputs/*
+!outputs/phase1_ai/
+!outputs/phase1_ai/**
+outputs/phase1_ai/**/*.png
