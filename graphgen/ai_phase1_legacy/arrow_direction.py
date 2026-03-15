@@ -23,6 +23,18 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     return v / n
 
 
+def estimate_track_scale(track_mask: np.ndarray) -> float:
+    """Estimate a representative track-width scale in pixels."""
+    if not np.any(track_mask):
+        return 6.0
+    dt = ndimage.distance_transform_edt(track_mask.astype(np.uint8))
+    vals = dt[dt > 0]
+    if vals.size == 0:
+        return 6.0
+    # Convert radius proxy to width proxy using a robust percentile.
+    return float(max(3.0, 2.0 * np.percentile(vals, 75)))
+
+
 def detect_arrow_components(mask: np.ndarray, min_area: int = 40) -> list[ArrowItem]:
     """Detect arrow components in a binary mask."""
     lab, n = ndimage.label(mask.astype(np.uint8))
@@ -64,9 +76,14 @@ def detect_arrow_components(mask: np.ndarray, min_area: int = 40) -> list[ArrowI
     return items
 
 
-def assign_arrows_to_edges(arrows: list[ArrowItem], edges: list[tuple[tuple[int, int], tuple[int, int]]]) -> dict[int, list[tuple[float, float]]]:
+def assign_arrows_to_edges(
+    arrows: list[ArrowItem],
+    edges: list[tuple[tuple[int, int], tuple[int, int]]],
+    max_distance: float | None = None,
+) -> dict[int, list[tuple[float, float]]]:
     """Assign arrows to nearest edge and return edge->list(direction vectors)."""
     votes: dict[int, list[tuple[float, float]]] = {i: [] for i in range(len(edges))}
+    max_d2 = None if max_distance is None else float(max_distance * max_distance)
     for a in arrows:
         cx, cy = a.center
         best_i = None
@@ -87,7 +104,7 @@ def assign_arrows_to_edges(arrows: list[ArrowItem], edges: list[tuple[tuple[int,
             if d < best_d:
                 best_d = d
                 best_i = i
-        if best_i is not None:
+        if best_i is not None and (max_d2 is None or best_d <= max_d2):
             votes[best_i].append(a.direction)
     return votes
 

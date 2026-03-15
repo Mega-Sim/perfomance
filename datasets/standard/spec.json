@@ -32,7 +32,7 @@
           255
         ],
         "tolerance_per_channel": 25,
-        "recommended_background_ratio_min": 0.70
+        "recommended_background_ratio_min": 0.7
       }
     },
     "track": {
@@ -66,8 +66,85 @@
     "direction_marker": {
       "required": true,
       "type": "arrow",
-      "color": "same_as_track",
-      "placement_rule": "outside_track"
+      "color": "black_or_dark",
+      "placement_rule": "outside_track",
+      "legacy_phase1_mask_class": "arrow_black"
+    }
+  },
+  "phase1": {
+    "color_thresholds": {
+      "background": {
+        "lo": [
+          230,
+          230,
+          230
+        ],
+        "hi": [
+          255,
+          255,
+          255
+        ]
+      },
+      "track_green": {
+        "lo": [
+          0,
+          120,
+          0
+        ],
+        "hi": [
+          100,
+          255,
+          100
+        ]
+      },
+      "split_red": {
+        "lo": [
+          140,
+          0,
+          0
+        ],
+        "hi": [
+          255,
+          100,
+          100
+        ]
+      },
+      "merge_purple": {
+        "lo": [
+          120,
+          0,
+          120
+        ],
+        "hi": [
+          255,
+          140,
+          255
+        ]
+      },
+      "station_blue": {
+        "lo": [
+          0,
+          0,
+          140
+        ],
+        "hi": [
+          100,
+          100,
+          255
+        ]
+      },
+      "arrow_black": {
+        "lo": [
+          0,
+          0,
+          0
+        ],
+        "hi": [
+          70,
+          70,
+          70
+        ]
+      }
     }
   }
 }
