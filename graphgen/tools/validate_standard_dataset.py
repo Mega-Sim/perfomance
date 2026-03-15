@@ -9,7 +9,10 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from scipy import ndimage
 
+from graphgen.ai_phase1_legacy.arrow_direction import estimate_track_scale
+from graphgen.ai_phase1_legacy.color_model import heuristic_masks, load_thresholds_from_spec
 from graphgen.spec import load_standard_spec
 
 
@@ -21,11 +24,19 @@ def _warn(message: str) -> None:
     print(f"WARN: {message}")
 
 
+def _component_areas(mask: np.ndarray) -> np.ndarray:
+    lab, n = ndimage.label(mask.astype(np.uint8))
+    if n == 0:
+        return np.array([], dtype=np.int32)
+    return np.bincount(lab.ravel())[1:]
+
+
 def main() -> int:
     spec = load_standard_spec()
     paths = spec["dataset"]["paths"]
     naming = spec["dataset"]["file_naming"]
     image_spec = spec["image"]
+    thresholds = load_thresholds_from_spec(spec)
 
     images_dir = Path(paths["images_dir"])
     stem_re = re.compile(naming["recommended_stem_regex"])
@@ -36,10 +47,6 @@ def main() -> int:
     bg_rgb = np.array(image_spec["canvas"]["background"]["rgb"], dtype=np.int16)
     bg_tol = int(image_spec["canvas"]["background"]["tolerance_per_channel"])
     bg_min_ratio = float(image_spec["canvas"]["background"]["recommended_background_ratio_min"])
-
-    green_spec = image_spec["track"]["color"]
-    red_spec = image_spec["node_marker"]["color"]
-    blue_spec = image_spec["station_marker"]["color"]
 
     image_paths = sorted(images_dir.glob("*.png"))
     if not image_paths:
@@ -73,34 +80,12 @@ def main() -> int:
             _warn(f"{path}: white background ratio {bg_ratio:.6f} < {bg_min_ratio:.2f}")
             warnings += 1
 
-        r = pix[:, :, 0]
-        g = pix[:, :, 1]
-        b = pix[:, :, 2]
-
-        green_mask = (
-            (g >= int(green_spec["min_g"]))
-            & ((g - r) >= int(green_spec["min_g_minus_r"]))
-            & ((g - b) >= int(green_spec["min_g_minus_b"]))
-        )
-        red_mask = (
-            (r >= int(red_spec["min_r"]))
-            & ((r - g) >= int(red_spec["min_r_minus_g"]))
-            & ((r - b) >= int(red_spec["min_r_minus_b"]))
-        )
-        blue_mask = (
-            (b >= int(blue_spec["min_b"]))
-            & ((b - r) >= int(blue_spec["min_b_minus_r"]))
-            & ((b - g) >= int(blue_spec["min_b_minus_g"]))
-        )
-        purple_mask = (
-            (r >= 120)
-            & (b >= 120)
-            & (g <= 120)
-            & (np.abs(r - b) <= 80)
-            & ((r - g) >= 40)
-            & ((b - g) >= 40)
-        )
-        black_mask = (r <= 60) & (g <= 60) & (b <= 60)
+        masks = heuristic_masks(arr, thresholds)
+        green_mask = masks.get("track_green", np.zeros(arr.shape[:2], dtype=bool))
+        red_mask = masks.get("split_red", np.zeros(arr.shape[:2], dtype=bool))
+        blue_mask = masks.get("station_blue", np.zeros(arr.shape[:2], dtype=bool))
+        purple_mask = masks.get("merge_purple", np.zeros(arr.shape[:2], dtype=bool))
+        black_mask = masks.get("arrow_black", np.zeros(arr.shape[:2], dtype=bool))
 
         green_ratio = _ratio(green_mask)
         red_ratio = _ratio(red_mask)
@@ -124,6 +109,34 @@ def main() -> int:
         if black_ratio < 0.00015:
             _warn(f"{path}: black arrow pixel ratio {black_ratio:.6f} < 0.00015")
             warnings += 1
+
+        # Geometry sanity checks (warning-only): robust against resolution differences.
+        track_scale = estimate_track_scale(green_mask)
+        if track_scale < 2.0:
+            _warn(f"{path}: estimated track scale {track_scale:.2f}px is unusually small")
+            warnings += 1
+
+        arrow_areas = _component_areas(black_mask)
+        if arrow_areas.size > 0:
+            min_expected_arrow_area = max(10.0, 0.8 * track_scale * track_scale)
+            small_ratio = float(np.mean(arrow_areas < min_expected_arrow_area))
+            if small_ratio > 0.7:
+                _warn(
+                    f"{path}: {small_ratio:.2%} of arrow components are smaller than scale-aware threshold "
+                    f"({min_expected_arrow_area:.1f}px^2)"
+                )
+                warnings += 1
+
+        marker_areas = np.concatenate([_component_areas(red_mask), _component_areas(purple_mask)])
+        marker_areas = marker_areas[marker_areas >= 2]
+        if marker_areas.size >= 4:
+            marker_q75 = float(np.percentile(marker_areas, 75))
+            if marker_q75 < max(10.0, 0.7 * track_scale * track_scale):
+                _warn(
+                    f"{path}: node marker component size (q75={marker_q75:.1f}px^2) "
+                    f"looks small for track scale {track_scale:.2f}px"
+                )
+                warnings += 1
 
     summary = {
         "images_total": len(image_paths),

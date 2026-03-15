@@ -82,7 +82,57 @@ def train_model(images: list[np.ndarray]) -> tuple[ColorModel, dict[str, int]]:
 
 
 def load_thresholds_from_spec(spec: dict[str, Any]) -> dict[str, dict[str, list[int]]]:
-    return spec.get("phase1", {}).get("color_thresholds", {})
+    phase1_thresholds = spec.get("phase1", {}).get("color_thresholds", {})
+    if phase1_thresholds:
+        return phase1_thresholds
+
+    image_spec = spec.get("image", {})
+    track = image_spec.get("track", {}).get("color", {})
+    red = image_spec.get("node_marker", {}).get("color", {})
+    blue = image_spec.get("station_marker", {}).get("color", {})
+
+    # Backward-compatible fallback derived from image-level spec.
+    return {
+        "background": {"lo": [230, 230, 230], "hi": [255, 255, 255]},
+        "track_green": {
+            "lo": [
+                0,
+                int(track.get("min_g", 120)),
+                0,
+            ],
+            "hi": [
+                int(max(0, int(track.get("min_g", 120)) - int(track.get("min_g_minus_r", 20)))),
+                255,
+                int(max(0, int(track.get("min_g", 120)) - int(track.get("min_g_minus_b", 20)))),
+            ],
+        },
+        "split_red": {
+            "lo": [
+                int(red.get("min_r", 140)),
+                0,
+                0,
+            ],
+            "hi": [
+                255,
+                int(max(0, int(red.get("min_r", 140)) - int(red.get("min_r_minus_g", 40)))),
+                int(max(0, int(red.get("min_r", 140)) - int(red.get("min_r_minus_b", 40)))),
+            ],
+        },
+        "merge_purple": {"lo": [120, 0, 120], "hi": [255, 140, 255]},
+        "station_blue": {
+            "lo": [
+                0,
+                0,
+                int(blue.get("min_b", 140)),
+            ],
+            "hi": [
+                int(max(0, int(blue.get("min_b", 140)) - int(blue.get("min_b_minus_r", 40)))),
+                int(max(0, int(blue.get("min_b", 140)) - int(blue.get("min_b_minus_g", 40)))),
+                255,
+            ],
+        },
+        "arrow_black": {"lo": [0, 0, 0], "hi": [70, 70, 70]},
+    }
 
 
 def heuristic_masks(img: np.ndarray, thresholds: dict[str, dict[str, list[int]]]) -> dict[str, np.ndarray]:
