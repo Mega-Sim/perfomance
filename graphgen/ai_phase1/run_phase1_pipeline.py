@@ -24,6 +24,7 @@ from src.build_graph import (
     render_svg,
     dump_graph,
 )
+from graphgen.ai_phase2.refine_graph import refine_assignments
 
 OUTPUT_ROOT = Path("outputs/phase1_ai")
 
@@ -37,6 +38,16 @@ def parse_args() -> argparse.Namespace:
         "--out_dir",
         default=str(OUTPUT_ROOT),
         help="Output directory (default: outputs/phase1_ai)",
+    )
+    p.add_argument(
+        "--use_phase2",
+        action="store_true",
+        help="Enable phase2 direction-refinement scaffold after solve()",
+    )
+    p.add_argument(
+        "--phase2_mode",
+        default="heuristic",
+        help="Phase2 refinement mode (default: heuristic)",
     )
     return p.parse_args()
 
@@ -73,6 +84,28 @@ def main() -> int:
     preview_svg = out_dir / "preview.svg"
     render_svg(edge_list, adj, station_nodes, assign, preview_svg)
 
+    phase2_files = []
+    if args.use_phase2:
+        print("      phase2 refinement enabled")
+        refined_assign = refine_assignments(
+            edge_list=edge_list,
+            adj=adj,
+            station_nodes=station_nodes,
+            assign=assign,
+            mode=args.phase2_mode,
+        )
+
+        render_png_phase2 = out_dir / "directed_graph_phase2.png"
+        render(edge_list, adj, station_nodes, refined_assign, render_png_phase2, arrow_scale=6)
+
+        graph_json_phase2 = out_dir / "graph_phase2.json"
+        dump_graph(edge_list, station_nodes, refined_assign, str(graph_json_phase2))
+
+        preview_svg_phase2 = out_dir / "preview_phase2.svg"
+        render_svg(edge_list, adj, station_nodes, refined_assign, preview_svg_phase2)
+
+        phase2_files = [render_png_phase2, graph_json_phase2, preview_svg_phase2]
+
     # ── Step 4: 리포트 생성 ──
     print("[4/4] Writing report...")
 
@@ -95,11 +128,31 @@ def main() -> int:
             f"- `{graph_json}` — sim_core 입력용 그래프",
             f"- `{preview_svg}` — SVG preview (DXF 기하 기반)",
             f"- `{render_png}` — matplotlib PNG",
+            *(
+                [
+                    f"- `{out_dir / 'graph_phase2.json'}` — phase2 refined graph",
+                    f"- `{out_dir / 'preview_phase2.svg'}` — phase2 SVG preview",
+                    f"- `{out_dir / 'directed_graph_phase2.png'}` — phase2 matplotlib PNG",
+                ]
+                if args.use_phase2
+                else []
+            ),
             f"- `{report_path}` — 이 리포트",
             "",
             "## Method",
             "DXF → parse → outer-loop CW → direction propagation → export",
             "(이미지 경유 역추출 제거됨, see issue #12)",
+            *(
+                [
+                    "",
+                    "## Phase2",
+                    f"- mode: `{args.phase2_mode}`",
+                    "- phase2 currently uses deterministic direction refinement",
+                    "- intended as an RL-ready scaffold for future policy injection",
+                ]
+                if args.use_phase2
+                else []
+            ),
         ]),
         encoding="utf-8",
     )
@@ -107,6 +160,10 @@ def main() -> int:
     diag_eids = [e["id"] for e in edge_list if e["kind"] == "D"]
     print(f"[OK] Done. nodes={n_nodes}, edges={n_edges}, stations={n_stations}")
     print(f"     diag_bits={bits} diag_eids={diag_eids} score={score}")
+    if phase2_files:
+        print("     phase2 outputs:")
+        for p in phase2_files:
+            print(f"       - {p}")
     print(f"     Report -> {report_path}")
     return 0
 
