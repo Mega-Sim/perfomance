@@ -1,5 +1,5 @@
 {
-  "spec_version": "1.1",
+  "spec_version": "1.3",
   "dataset": {
     "paths": {
       "images_dir": "datasets/standard/images",
@@ -13,6 +13,14 @@
         ".png"
       ],
       "recommended_stem_regex": "^[0-9]{4,6}$"
+    },
+    "graph_supervision": {
+      "required_for_graph_task": false,
+      "graph_json_schema": {
+        "nodes": "[{id:int, x:number, y:number, type:split|merge|junction}]",
+        "edges": "[{id:int, source:int, target:int, direction:forward|reverse|bidirectional, polyline:[[x,y], ...]}]",
+        "stations_optional": "{station_name: node_id}"
+      }
     }
   },
   "image": {
@@ -32,42 +40,214 @@
           255
         ],
         "tolerance_per_channel": 25,
-        "recommended_background_ratio_min": 0.70
+        "recommended_background_ratio_min": 0.7
       }
     },
-    "track": {
-      "color": {
-        "mode": "green_dominant",
-        "min_g": 120,
-        "min_g_minus_r": 20,
-        "min_g_minus_b": 20
+    "classes": {
+      "track": {
+        "shape": "thick polyline",
+        "color": {
+          "mode": "green_dominant",
+          "min_g": 120,
+          "min_g_minus_r": 20,
+          "min_g_minus_b": 20
+        }
+      },
+      "split_marker": {
+        "required": true,
+        "shape": "circle dot",
+        "color": {
+          "mode": "red_dominant",
+          "min_r": 140,
+          "min_r_minus_g": 40,
+          "min_r_minus_b": 40
+        }
+      },
+      "merge_marker": {
+        "required": true,
+        "shape": "circle dot",
+        "color": {
+          "mode": "purple_dominant",
+          "min_r": 120,
+          "min_b": 120,
+          "max_g": 120,
+          "max_r_minus_b": 80,
+          "min_r_minus_g": 40,
+          "min_b_minus_g": 40
+        }
+      },
+      "station_marker": {
+        "required": false,
+        "shape": "square dot",
+        "color": {
+          "mode": "blue_dominant",
+          "min_b": 140,
+          "min_b_minus_r": 40,
+          "min_b_minus_g": 40
+        }
+      },
+      "direction_marker": {
+        "required": true,
+        "type": "arrow",
+        "color": {
+          "mode": "black_dominant",
+          "max_r": 60,
+          "max_g": 60,
+          "max_b": 60
+        },
+        "placement_rule": "outside_track"
+      }
+    }
+  },
+  "training": {
+    "task_family": "hybrid_pipeline",
+    "tasks": [
+      "semantic_segmentation",
+      "keypoint_node_detection",
+      "edge_direction_classification",
+      "graph_reconstruction"
+    ],
+    "label_targets": {
+      "segmentation_mask": [
+        "background",
+        "track",
+        "split_marker",
+        "merge_marker",
+        "station_marker",
+        "direction_marker"
+      ],
+      "node_points": [
+        "split_marker",
+        "merge_marker",
+        "station_marker"
+      ],
+      "edge_polylines": "requires graph json",
+      "edge_direction": "requires graph json"
+    },
+    "split": {
+      "strategy": "hash_by_stem",
+      "seed": 2026,
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "test_ratio": 0.15
+    },
+    "augmentation": {
+      "geometry": {
+        "rotate_deg": [
+          -5,
+          5
+        ],
+        "translate_px": [
+          -12,
+          12
+        ],
+        "scale": [
+          0.92,
+          1.08
+        ]
+      },
+      "appearance": {
+        "line_width_scale": [
+          0.8,
+          1.25
+        ],
+        "marker_size_scale": [
+          0.8,
+          1.3
+        ],
+        "antialiasing_jitter": true,
+        "background_rgb_jitter": 12,
+        "gaussian_noise_std": 3.0
       }
     },
-    "node_marker": {
-      "required": true,
-      "shape": "circle dot",
-      "color": {
-        "mode": "red_dominant",
-        "min_r": 140,
-        "min_r_minus_g": 40,
-        "min_r_minus_b": 40
+    "evaluation": {
+      "segmentation": [
+        "macro_iou",
+        "macro_f1"
+      ],
+      "topology": [
+        "node_precision",
+        "node_recall",
+        "edge_recovery_rate",
+        "direction_accuracy",
+        "topology_consistency"
+      ]
+    }
+  },
+  "phase1": {
+    "color_thresholds": {
+      "background": {
+        "lo": [
+          230,
+          230,
+          230
+        ],
+        "hi": [
+          255,
+          255,
+          255
+        ]
+      },
+      "track_green": {
+        "lo": [
+          0,
+          120,
+          0
+        ],
+        "hi": [
+          220,
+          255,
+          220
+        ]
+      },
+      "split_red": {
+        "lo": [
+          140,
+          0,
+          0
+        ],
+        "hi": [
+          255,
+          180,
+          180
+        ]
+      },
+      "merge_purple": {
+        "lo": [
+          120,
+          0,
+          120
+        ],
+        "hi": [
+          255,
+          140,
+          255
+        ]
+      },
+      "station_blue": {
+        "lo": [
+          0,
+          0,
+          140
+        ],
+        "hi": [
+          180,
+          180,
+          255
+        ]
+      },
+      "arrow_black": {
+        "lo": [
+          0,
+          0,
+          0
+        ],
+        "hi": [
+          60,
+          60,
+          60
+        ]
       }
-    },
-    "station_marker": {
-      "required": false,
-      "shape": "square dot",
-      "color": {
-        "mode": "blue_dominant",
-        "min_b": 140,
-        "min_b_minus_r": 40,
-        "min_b_minus_g": 40
-      }
-    },
-    "direction_marker": {
-      "required": true,
-      "type": "arrow",
-      "color": "same_as_track",
-      "placement_rule": "outside_track"
     }
   }
 }

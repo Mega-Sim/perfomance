@@ -21,6 +21,60 @@ def _warn(message: str) -> None:
     print(f"WARN: {message}")
 
 
+def _mask_green_dominant(pix: np.ndarray, cfg: dict[str, int]) -> np.ndarray:
+    r = pix[:, :, 0]
+    g = pix[:, :, 1]
+    b = pix[:, :, 2]
+    return (
+        (g >= int(cfg["min_g"]))
+        & ((g - r) >= int(cfg["min_g_minus_r"]))
+        & ((g - b) >= int(cfg["min_g_minus_b"]))
+    )
+
+
+def _mask_red_dominant(pix: np.ndarray, cfg: dict[str, int]) -> np.ndarray:
+    r = pix[:, :, 0]
+    g = pix[:, :, 1]
+    b = pix[:, :, 2]
+    return (
+        (r >= int(cfg["min_r"]))
+        & ((r - g) >= int(cfg["min_r_minus_g"]))
+        & ((r - b) >= int(cfg["min_r_minus_b"]))
+    )
+
+
+def _mask_blue_dominant(pix: np.ndarray, cfg: dict[str, int]) -> np.ndarray:
+    r = pix[:, :, 0]
+    g = pix[:, :, 1]
+    b = pix[:, :, 2]
+    return (
+        (b >= int(cfg["min_b"]))
+        & ((b - r) >= int(cfg["min_b_minus_r"]))
+        & ((b - g) >= int(cfg["min_b_minus_g"]))
+    )
+
+
+def _mask_purple_dominant(pix: np.ndarray, cfg: dict[str, int]) -> np.ndarray:
+    r = pix[:, :, 0]
+    g = pix[:, :, 1]
+    b = pix[:, :, 2]
+    return (
+        (r >= int(cfg["min_r"]))
+        & (b >= int(cfg["min_b"]))
+        & (g <= int(cfg["max_g"]))
+        & (np.abs(r - b) <= int(cfg["max_r_minus_b"]))
+        & ((r - g) >= int(cfg["min_r_minus_g"]))
+        & ((b - g) >= int(cfg["min_b_minus_g"]))
+    )
+
+
+def _mask_black_dominant(pix: np.ndarray, cfg: dict[str, int]) -> np.ndarray:
+    r = pix[:, :, 0]
+    g = pix[:, :, 1]
+    b = pix[:, :, 2]
+    return (r <= int(cfg["max_r"])) & (g <= int(cfg["max_g"])) & (b <= int(cfg["max_b"]))
+
+
 def main() -> int:
     spec = load_standard_spec()
     paths = spec["dataset"]["paths"]
@@ -37,9 +91,12 @@ def main() -> int:
     bg_tol = int(image_spec["canvas"]["background"]["tolerance_per_channel"])
     bg_min_ratio = float(image_spec["canvas"]["background"]["recommended_background_ratio_min"])
 
-    green_spec = image_spec["track"]["color"]
-    red_spec = image_spec["node_marker"]["color"]
-    blue_spec = image_spec["station_marker"]["color"]
+    classes = image_spec["classes"]
+    green_spec = classes["track"]["color"]
+    split_spec = classes["split_marker"]["color"]
+    merge_spec = classes["merge_marker"]["color"]
+    station_spec = classes["station_marker"]["color"]
+    direction_spec = classes["direction_marker"]["color"]
 
     image_paths = sorted(images_dir.glob("*.png"))
     if not image_paths:
@@ -49,10 +106,10 @@ def main() -> int:
 
     warnings = 0
     green_ratios: list[float] = []
-    red_ratios: list[float] = []
-    blue_ratios: list[float] = []
-    purple_ratios: list[float] = []
-    black_ratios: list[float] = []
+    split_ratios: list[float] = []
+    merge_ratios: list[float] = []
+    station_ratios: list[float] = []
+    direction_ratios: list[float] = []
 
     for path in image_paths:
         stem = path.stem
@@ -73,71 +130,48 @@ def main() -> int:
             _warn(f"{path}: white background ratio {bg_ratio:.6f} < {bg_min_ratio:.2f}")
             warnings += 1
 
-        r = pix[:, :, 0]
-        g = pix[:, :, 1]
-        b = pix[:, :, 2]
-
-        green_mask = (
-            (g >= int(green_spec["min_g"]))
-            & ((g - r) >= int(green_spec["min_g_minus_r"]))
-            & ((g - b) >= int(green_spec["min_g_minus_b"]))
-        )
-        red_mask = (
-            (r >= int(red_spec["min_r"]))
-            & ((r - g) >= int(red_spec["min_r_minus_g"]))
-            & ((r - b) >= int(red_spec["min_r_minus_b"]))
-        )
-        blue_mask = (
-            (b >= int(blue_spec["min_b"]))
-            & ((b - r) >= int(blue_spec["min_b_minus_r"]))
-            & ((b - g) >= int(blue_spec["min_b_minus_g"]))
-        )
-        purple_mask = (
-            (r >= 120)
-            & (b >= 120)
-            & (g <= 120)
-            & (np.abs(r - b) <= 80)
-            & ((r - g) >= 40)
-            & ((b - g) >= 40)
-        )
-        black_mask = (r <= 60) & (g <= 60) & (b <= 60)
+        green_mask = _mask_green_dominant(pix, green_spec)
+        split_mask = _mask_red_dominant(pix, split_spec)
+        merge_mask = _mask_purple_dominant(pix, merge_spec)
+        station_mask = _mask_blue_dominant(pix, station_spec)
+        direction_mask = _mask_black_dominant(pix, direction_spec)
 
         green_ratio = _ratio(green_mask)
-        red_ratio = _ratio(red_mask)
-        blue_ratio = _ratio(blue_mask)
-        purple_ratio = _ratio(purple_mask)
-        black_ratio = _ratio(black_mask)
-        node_ratio = red_ratio + purple_ratio
+        split_ratio = _ratio(split_mask)
+        merge_ratio = _ratio(merge_mask)
+        station_ratio = _ratio(station_mask)
+        direction_ratio = _ratio(direction_mask)
+        node_ratio = split_ratio + merge_ratio
 
         green_ratios.append(green_ratio)
-        red_ratios.append(red_ratio)
-        blue_ratios.append(blue_ratio)
-        purple_ratios.append(purple_ratio)
-        black_ratios.append(black_ratio)
+        split_ratios.append(split_ratio)
+        merge_ratios.append(merge_ratio)
+        station_ratios.append(station_ratio)
+        direction_ratios.append(direction_ratio)
 
         if green_ratio < 0.002:
             _warn(f"{path}: green pixel ratio {green_ratio:.6f} < 0.002")
             warnings += 1
         if node_ratio < 0.0002:
-            _warn(f"{path}: node pixel ratio (red+purple) {node_ratio:.6f} < 0.0002")
+            _warn(f"{path}: node pixel ratio (split+merge) {node_ratio:.6f} < 0.0002")
             warnings += 1
-        if black_ratio < 0.00015:
-            _warn(f"{path}: black arrow pixel ratio {black_ratio:.6f} < 0.00015")
+        if direction_ratio < 0.00015:
+            _warn(f"{path}: direction marker pixel ratio {direction_ratio:.6f} < 0.00015")
             warnings += 1
 
     summary = {
         "images_total": len(image_paths),
         "warnings": warnings,
         "green_ratio_mean": float(np.mean(green_ratios)),
-        "red_ratio_mean": float(np.mean(red_ratios)),
-        "blue_ratio_mean": float(np.mean(blue_ratios)),
-        "purple_ratio_mean": float(np.mean(purple_ratios)),
-        "black_ratio_mean": float(np.mean(black_ratios)),
+        "split_ratio_mean": float(np.mean(split_ratios)),
+        "merge_ratio_mean": float(np.mean(merge_ratios)),
+        "station_ratio_mean": float(np.mean(station_ratios)),
+        "direction_ratio_mean": float(np.mean(direction_ratios)),
         "green_ratio_min": float(np.min(green_ratios)),
-        "red_ratio_min": float(np.min(red_ratios)),
-        "blue_ratio_min": float(np.min(blue_ratios)),
-        "purple_ratio_min": float(np.min(purple_ratios)),
-        "black_ratio_min": float(np.min(black_ratios)),
+        "split_ratio_min": float(np.min(split_ratios)),
+        "merge_ratio_min": float(np.min(merge_ratios)),
+        "station_ratio_min": float(np.min(station_ratios)),
+        "direction_ratio_min": float(np.min(direction_ratios)),
     }
     print(json.dumps(summary, ensure_ascii=False))
 
