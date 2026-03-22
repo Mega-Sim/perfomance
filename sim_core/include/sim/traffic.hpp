@@ -42,6 +42,12 @@ public:
     return -1;
   }
 
+  size_t waiters_size(int edge_id) const {
+    return edges_[edge_id].waiters.size();
+  }
+
+  size_t edge_count() const { return edges_.size(); }
+
 private:
   std::vector<EdgeResv> edges_;
 };
