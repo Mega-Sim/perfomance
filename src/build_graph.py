@@ -216,6 +216,174 @@ def polygon_area(poly):
         s += x1*y2-x2*y1
     return 0.5*s
 
+
+def _normalize(vec):
+    x, y = vec
+    n = math.hypot(x, y)
+    if n == 0:
+        return (0.0, 0.0)
+    return (x / n, y / n)
+
+
+def tangent_angle_deg(vec_a, vec_b):
+    """Smallest angle in degrees between two tangent vectors."""
+    ax, ay = _normalize(vec_a)
+    bx, by = _normalize(vec_b)
+    dot = max(-1.0, min(1.0, ax * bx + ay * by))
+    return math.degrees(math.acos(dot))
+
+
+def edge_tangent_at_node(edge, node):
+    """Return tangent vector pointing away from `node` along `edge` geometry."""
+    geom = edge.get("geom", {})
+    u = edge["u"]
+    v = edge["v"]
+    if node != u and node != v:
+        raise ValueError(f"node {node} is not an endpoint of edge {edge.get('id')}")
+
+    if geom.get("type") == "LINE":
+        if node == u:
+            return (v[0] - u[0], v[1] - u[1])
+        return (u[0] - v[0], u[1] - v[1])
+
+    if geom.get("type") == "ARC":
+        pts = geom.get("pts", [])
+        if len(pts) < 2:
+            return (0.0, 0.0)
+
+        d0 = dist(node, pts[0])
+        d1 = dist(node, pts[-1])
+        if d0 <= d1:
+            # node is near first point; tangent points to the next sample.
+            return (pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
+        # node is near last point; tangent points backward into the curve.
+        return (pts[-2][0] - pts[-1][0], pts[-2][1] - pts[-1][1])
+
+    # fallback: endpoint chord direction
+    if node == u:
+        return (v[0] - u[0], v[1] - u[1])
+    return (u[0] - v[0], u[1] - v[1])
+
+
+def is_smooth_pair(edge_a, edge_b, node, smooth_thresh_deg=35.0):
+    """True when two edges form near-colinear continuation through `node`."""
+    ta = edge_tangent_at_node(edge_a, node)
+    tb = edge_tangent_at_node(edge_b, node)
+    # For pass-through, away-from-node tangents should be near opposite directions.
+    return tangent_angle_deg(ta, tb) >= (180.0 - smooth_thresh_deg)
+
+
+def classify_node_flow_pattern(node, incident_eids, edge_list, assign):
+    incoming = []
+    outgoing = []
+    for eid in incident_eids:
+        e = edge_list[eid]
+        src, dst = (e["u"], e["v"]) if assign[eid] == 0 else (e["v"], e["u"])
+        if dst == node:
+            incoming.append(eid)
+        elif src == node:
+            outgoing.append(eid)
+
+    smooth_pairs = []
+    for i in range(len(incident_eids)):
+        for j in range(i + 1, len(incident_eids)):
+            ea = edge_list[incident_eids[i]]
+            eb = edge_list[incident_eids[j]]
+            if is_smooth_pair(ea, eb, node):
+                smooth_pairs.append((incident_eids[i], incident_eids[j]))
+
+    return {
+        "incoming": incoming,
+        "outgoing": outgoing,
+        "smooth_pairs": smooth_pairs,
+        "degree": len(incident_eids),
+    }
+
+
+def violates_nonholonomic_branch_rule(node, incident_eids, edge_list, assign):
+    """Local physical validity check:
+    - degree-2 smooth continuation must be one-in/one-out
+    - degree>=3 node must be representable as split/merge
+    - smooth pair at a branch must preserve continuous heading
+    """
+    pattern = classify_node_flow_pattern(node, incident_eids, edge_list, assign)
+    n_in = len(pattern["incoming"])
+    n_out = len(pattern["outgoing"])
+    deg = pattern["degree"]
+
+    if deg <= 1:
+        return False
+
+    if deg == 2 and pattern["smooth_pairs"]:
+        return not (n_in == 1 and n_out == 1)
+
+    if deg >= 3:
+        # Must be split (1 in, N out) or merge (N in, 1 out)
+        if not (n_in == 1 or n_out == 1):
+            return True
+        # Smooth continuation pair should be pass-through (one in, one out).
+        for a, b in pattern["smooth_pairs"]:
+            a_is_in = a in pattern["incoming"]
+            b_is_in = b in pattern["incoming"]
+            if a_is_in == b_is_in:
+                return True
+
+    return False
+
+
+def count_nonholonomic_branch_violations(edge_list, adj, assign):
+    inc = collections.defaultdict(list)
+    for e in edge_list:
+        inc[e["u"]].append(e["id"])
+        inc[e["v"]].append(e["id"])
+    n_bad = 0
+    for node in adj.keys():
+        if violates_nonholonomic_branch_rule(node, inc[node], edge_list, assign):
+            n_bad += 1
+    return n_bad
+
+
+def _count_dead_ends(edge_list, adj, assign):
+    incoming = collections.defaultdict(int)
+    outgoing = collections.defaultdict(int)
+    for e in edge_list:
+        src, dst = (e["u"], e["v"]) if assign[e["id"]] == 0 else (e["v"], e["u"])
+        outgoing[src] += 1
+        incoming[dst] += 1
+    n_dead = 0
+    for node in adj.keys():
+        if incoming[node] == 0 or outgoing[node] == 0:
+            n_dead += 1
+    return n_dead
+
+
+def _count_station_reachability_issues(edge_list, station_nodes, assign):
+    stations = list(station_nodes.values())
+    if len(stations) <= 1:
+        return 0
+    directed = collections.defaultdict(set)
+    for e in edge_list:
+        src, dst = (e["u"], e["v"]) if assign[e["id"]] == 0 else (e["v"], e["u"])
+        directed[src].add(dst)
+
+    def bfs(start):
+        seen = {start}
+        q = collections.deque([start])
+        while q:
+            cur = q.popleft()
+            for nxt in directed.get(cur, ()):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    q.append(nxt)
+        return seen
+
+    issues = 0
+    for s in stations:
+        seen = bfs(s)
+        if any(t not in seen for t in stations if t != s):
+            issues += 1
+    return issues
+
 def find_outer_loop(adj):
     # 매우 단순한 outer loop 추정: (x+y) 최대 노드에서 시작하여 left-hand rule로 cycle 탐색
     nodes=list(adj.keys())
@@ -366,8 +534,40 @@ def solve(edge_list, adj, by_ends, station_nodes):
                 continue
             q.append(n)
 
+    # 3) nonholonomic local repair pass:
+    #    enforce split/merge and smooth pass-through at junctions.
+    def objective(cur_assign):
+        return (
+            count_nonholonomic_branch_violations(edge_list, adj, cur_assign),
+            _count_station_reachability_issues(edge_list, station_nodes, cur_assign),
+            _count_dead_ends(edge_list, adj, cur_assign),
+        )
+
+    base_obj = objective(assign)
+    for _ in range(8):
+        improved = False
+        for n in inc:
+            if not violates_nonholonomic_branch_rule(n, inc[n], edge_list, assign):
+                continue
+            best_edge = None
+            best_obj = base_obj
+            for eid in inc[n]:
+                trial = dict(assign)
+                trial[eid] = 1 - trial[eid]
+                trial_obj = objective(trial)
+                if trial_obj < best_obj:
+                    best_obj = trial_obj
+                    best_edge = eid
+            if best_edge is not None:
+                assign[best_edge] = 1 - assign[best_edge]
+                bits[best_edge] = 1
+                base_obj = best_obj
+                improved = True
+        if not improved:
+            break
+
     # scoring (simple)
-    score = len(bits)
+    score = len(bits) - 100 * count_nonholonomic_branch_violations(edge_list, adj, assign)
 
     return bits, score, assign
 
