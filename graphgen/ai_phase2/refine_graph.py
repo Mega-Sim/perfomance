@@ -3,10 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from .features import extract_edge_features
+from .ppo_inference import run_ppo_refinement
 from .reward import score_assignment_quality
 
 
-SUPPORTED_MODES = {"heuristic"}
+SUPPORTED_MODES = {"heuristic", "ppo"}
 
 
 def _decide_flip_heuristic(feature, current: int) -> int:
@@ -28,6 +29,8 @@ def refine_assignments(
     station_nodes: dict[str, tuple[float, float]],
     assign: dict[int, int],
     mode: str = "heuristic",
+    model_path: str | None = None,
+    seed: int | None = None,
 ) -> dict[int, int]:
     """Refine directed edge assignment in a phase2 pass.
 
@@ -37,22 +40,30 @@ def refine_assignments(
     if mode not in SUPPORTED_MODES:
         raise ValueError(f"Unsupported phase2 mode: {mode}")
 
+    if mode == "ppo":
+        if not model_path:
+            raise ValueError("phase2 mode 'ppo' requires model_path")
+        return run_ppo_refinement(
+            edge_list=edge_list,
+            adj=adj,
+            station_nodes=station_nodes,
+            assign=assign,
+            model_path=model_path,
+            seed=seed,
+        )
+
     features = extract_edge_features(edge_list, adj, station_nodes)
     refined_assign = dict(assign)
+    for feature in features:
+        eid = feature.edge_index
+        current = refined_assign.get(eid, 0)
+        candidate = _decide_flip_heuristic(feature, current)
+        if candidate != current:
+            trial = dict(refined_assign)
+            trial[eid] = candidate
+            if score_assignment_quality(edge_list, adj, station_nodes, trial) >= score_assignment_quality(
+                edge_list, adj, station_nodes, refined_assign
+            ):
+                refined_assign[eid] = candidate
 
-    if mode == "heuristic":
-        for feature in features:
-            eid = feature.edge_index
-            current = refined_assign.get(eid, 0)
-            candidate = _decide_flip_heuristic(feature, current)
-            if candidate != current:
-                trial = dict(refined_assign)
-                trial[eid] = candidate
-                if score_assignment_quality(edge_list, adj, station_nodes, trial) >= score_assignment_quality(
-                    edge_list, adj, station_nodes, refined_assign
-                ):
-                    refined_assign[eid] = candidate
-
-    # TODO: Inject learned RL/policy model here.
-    # TODO: Replace per-edge greedy evaluation with trajectory/batch policy rollout.
     return refined_assign

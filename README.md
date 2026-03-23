@@ -51,3 +51,33 @@ python -m graphgen.ai_phase1.run_phase1_pipeline --dxf examples/Drawing1.dxf
 
 Note: 기존 이미지 경유 역추출 코드(색상 세그멘테이션 + 스켈레톤화)는
 `graphgen/ai_phase1_legacy/`로 이동되었습니다. 자세한 사유는 issue #12 참고.
+
+## Phase2: Direction refinement (heuristic + PPO baseline)
+
+Phase2는 `solve()` 이후에 기존 방향 할당을 **keep/flip** 방식으로 보정합니다.
+
+- 기본 모드: `heuristic` (기존 deterministic fallback)
+- 학습 모드: `ppo` (Stable-Baselines3 PPO 정책 로드/추론)
+- 보상 기준: dead-end / station reachability / nonholonomic violation 기반 점수 개선
+
+### PPO 학습
+
+```bash
+python -m graphgen.ai_phase2.train_phase2_rl \
+  --dxf examples/Drawing1.dxf \
+  --total_timesteps 20000 \
+  --model_out outputs/phase2/ppo_drawing1 \
+  --seed 42
+```
+
+### Phase1 파이프라인에서 Phase2 PPO 추론 사용
+
+```bash
+python -m graphgen.ai_phase1.run_phase1_pipeline \
+  --dxf examples/Drawing1.dxf \
+  --use_phase2 \
+  --phase2_mode ppo \
+  --phase2_model outputs/phase2/ppo_drawing1.zip
+```
+
+> 현재 PPO 경로는 첫 번째 learned-policy baseline(MLP + fixed vector observation)이며, 최종 아키텍처가 아닙니다.

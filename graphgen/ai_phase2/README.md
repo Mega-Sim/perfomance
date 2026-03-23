@@ -15,9 +15,13 @@ Phase 2 is intentionally inserted **after `solve()`** so it can refine an alread
   - no node split/merge
   - no edge add/delete
 
-## Future scope
+## RL baseline scope in this repo
 
-This package exposes an RL-ready interface so a future policy model can replace the deterministic heuristic in `refine_assignments(...)`.
+- `rl_env.py`: Gymnasium env (`keep`/`flip` binary action per candidate edge)
+- `train_phase2_rl.py`: Stable-Baselines3 PPO trainer
+- `refine_graph.py`: inference mode `ppo` + default fallback mode `heuristic`
+
+This is the first learned-policy baseline (MLP-friendly fixed vector observation), not the final architecture.
 
 ## Run on `examples/Drawing1.dxf`
 
@@ -29,3 +33,23 @@ python -m graphgen.ai_phase1.run_phase1_pipeline \
 ```
 
 Expected outputs include both baseline Phase 1 files and Phase 2 refined files.
+
+Train PPO:
+
+```bash
+python -m graphgen.ai_phase2.train_phase2_rl \
+  --dxf examples/Drawing1.dxf \
+  --total_timesteps 20000 \
+  --model_out outputs/phase2/ppo_drawing1 \
+  --seed 42
+```
+
+Use PPO inference:
+
+```bash
+python -m graphgen.ai_phase1.run_phase1_pipeline \
+  --dxf examples/Drawing1.dxf \
+  --use_phase2 \
+  --phase2_mode ppo \
+  --phase2_model outputs/phase2/ppo_drawing1.zip
+```

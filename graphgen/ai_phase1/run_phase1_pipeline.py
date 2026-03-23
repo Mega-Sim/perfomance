@@ -49,6 +49,11 @@ def parse_args() -> argparse.Namespace:
         default="heuristic",
         help="Phase2 refinement mode (default: heuristic)",
     )
+    p.add_argument(
+        "--phase2_model",
+        default=None,
+        help="Model path for phase2_mode=ppo",
+    )
     return p.parse_args()
 
 
@@ -87,12 +92,16 @@ def main() -> int:
     phase2_files = []
     if args.use_phase2:
         print("      phase2 refinement enabled")
+        if args.phase2_mode == "ppo" and not args.phase2_model:
+            print("[ERROR] --phase2_model is required when --phase2_mode ppo")
+            return 1
         refined_assign = refine_assignments(
             edge_list=edge_list,
             adj=adj,
             station_nodes=station_nodes,
             assign=assign,
             mode=args.phase2_mode,
+            model_path=args.phase2_model,
         )
 
         render_png_phase2 = out_dir / "directed_graph_phase2.png"
@@ -147,8 +156,12 @@ def main() -> int:
                     "",
                     "## Phase2",
                     f"- mode: `{args.phase2_mode}`",
-                    "- phase2 currently uses deterministic direction refinement",
-                    "- intended as an RL-ready scaffold for future policy injection",
+                    (
+                        f"- model: `{args.phase2_model}`"
+                        if args.phase2_mode == "ppo"
+                        else "- model: not used (heuristic)"
+                    ),
+                    "- phase2 supports deterministic heuristic and PPO inference",
                 ]
                 if args.use_phase2
                 else []
