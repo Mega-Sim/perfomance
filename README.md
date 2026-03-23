@@ -60,13 +60,13 @@ Phase2는 `solve()` 이후에 기존 방향 할당을 **keep/flip** 방식으로
 - 학습 모드: `ppo` (Stable-Baselines3 PPO 정책 로드/추론)
 - 보상 기준: dead-end / station reachability / nonholonomic violation 기반 점수 개선
 
-### PPO 학습
+### PPO 학습 (Drawing1 smoke baseline)
 
 ```bash
 python -m graphgen.ai_phase2.train_phase2_rl \
   --dxf examples/Drawing1.dxf \
-  --total_timesteps 20000 \
-  --model_out outputs/phase2/ppo_drawing1 \
+  --total_timesteps 5000 \
+  --model_out outputs/models/phase2_ppo_drawing1 \
   --seed 42
 ```
 
@@ -77,7 +77,24 @@ python -m graphgen.ai_phase1.run_phase1_pipeline \
   --dxf examples/Drawing1.dxf \
   --use_phase2 \
   --phase2_mode ppo \
-  --phase2_model outputs/phase2/ppo_drawing1.zip
+  --phase2_model outputs/models/phase2_ppo_drawing1.zip \
+  --phase2_seed 42
 ```
 
-> 현재 PPO 경로는 첫 번째 learned-policy baseline(MLP + fixed vector observation)이며, 최종 아키텍처가 아닙니다.
+### Phase2 평가 (phase1 vs heuristic vs PPO)
+
+```bash
+python -m graphgen.ai_phase2.eval_phase2_rl \
+  --dxf examples/Drawing1.dxf \
+  --ppo_model outputs/models/phase2_ppo_drawing1.zip \
+  --out_dir outputs/phase2_eval \
+  --seed 42
+```
+
+생성물(예시):
+- `outputs/phase2_eval/drawing1_phase1.png`
+- `outputs/phase2_eval/drawing1_heuristic.png`
+- `outputs/phase2_eval/drawing1_ppo.png`
+- `outputs/phase2_eval/drawing1_report.md`
+
+> 현재 PPO 경로는 학습/추론 파이프라인 smoke baseline입니다. 휴리스틱보다 항상 우수함을 보장하지 않습니다.

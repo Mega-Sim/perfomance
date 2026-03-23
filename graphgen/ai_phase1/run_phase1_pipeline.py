@@ -54,6 +54,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Model path for phase2_mode=ppo",
     )
+    p.add_argument(
+        "--phase2_seed",
+        type=int,
+        default=42,
+        help="Random seed used by phase2_mode=ppo rollout",
+    )
     return p.parse_args()
 
 
@@ -95,14 +101,19 @@ def main() -> int:
         if args.phase2_mode == "ppo" and not args.phase2_model:
             print("[ERROR] --phase2_model is required when --phase2_mode ppo")
             return 1
-        refined_assign = refine_assignments(
-            edge_list=edge_list,
-            adj=adj,
-            station_nodes=station_nodes,
-            assign=assign,
-            mode=args.phase2_mode,
-            model_path=args.phase2_model,
-        )
+        try:
+            refined_assign = refine_assignments(
+                edge_list=edge_list,
+                adj=adj,
+                station_nodes=station_nodes,
+                assign=assign,
+                mode=args.phase2_mode,
+                model_path=args.phase2_model,
+                seed=args.phase2_seed,
+            )
+        except Exception as exc:
+            print(f"[ERROR] phase2 refinement failed: {exc}")
+            return 1
 
         render_png_phase2 = out_dir / "directed_graph_phase2.png"
         render(edge_list, adj, station_nodes, refined_assign, render_png_phase2, arrow_scale=6)
@@ -161,6 +172,7 @@ def main() -> int:
                         if args.phase2_mode == "ppo"
                         else "- model: not used (heuristic)"
                     ),
+                    f"- seed: `{args.phase2_seed}`",
                     "- phase2 supports deterministic heuristic and PPO inference",
                 ]
                 if args.use_phase2
