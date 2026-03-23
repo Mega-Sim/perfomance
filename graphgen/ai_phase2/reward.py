@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from typing import Any
 
+from src.build_graph import count_nonholonomic_branch_violations
+
 
 def _build_directed_adj(edge_list: list[dict[str, Any]], assign: dict[int, int]) -> dict[tuple[float, float], set[tuple[float, float]]]:
     directed = defaultdict(set)
@@ -78,4 +80,5 @@ def score_assignment_quality(
     """Deterministic scalar score used as an RL-ready reward baseline."""
     dead_ends = count_dead_ends(edge_list, adj, assign)
     station_issues = count_station_reachability_issues(edge_list, station_nodes, assign)
-    return float(-(2 * dead_ends + 5 * station_issues))
+    nonholonomic_violations = count_nonholonomic_branch_violations(edge_list, adj, assign)
+    return float(-(2 * dead_ends + 5 * station_issues + 20 * nonholonomic_violations))
