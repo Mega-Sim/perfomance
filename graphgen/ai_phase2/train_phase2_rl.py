@@ -13,8 +13,12 @@ from graphgen.ai_phase2.rl_env import GraphDirectionRefineEnv
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train PPO baseline for phase2 direction refinement")
     p.add_argument("--dxf", required=True, help="Input DXF file path")
-    p.add_argument("--total_timesteps", type=int, default=20000, help="Total PPO timesteps")
-    p.add_argument("--model_out", required=True, help="Output path for trained PPO model")
+    p.add_argument("--total_timesteps", type=int, default=5000, help="Total PPO timesteps")
+    p.add_argument(
+        "--model_out",
+        default="outputs/models/phase2_ppo_drawing1",
+        help="Output path for trained PPO model (default: outputs/models/phase2_ppo_drawing1)",
+    )
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     return p.parse_args()
 
@@ -46,7 +50,7 @@ def main() -> int:
         station_nodes=station_nodes,
         initial_assign=assign,
     )
-    model = PPO("MlpPolicy", env, verbose=1, seed=args.seed)
+    model = PPO("MlpPolicy", env, verbose=1, seed=args.seed, n_steps=64, batch_size=64)
     model.learn(total_timesteps=args.total_timesteps)
 
     model_out = Path(args.model_out)
