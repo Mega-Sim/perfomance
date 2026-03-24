@@ -17,7 +17,11 @@ def run_ppo_refinement(
     """Run deterministic PPO policy rollout over one graph episode."""
     model_path = Path(model_path)
     if not model_path.exists():
-        raise FileNotFoundError(f"PPO model file not found: {model_path}")
+        zipped = model_path.with_suffix(".zip")
+        if zipped.exists():
+            model_path = zipped
+        else:
+            raise FileNotFoundError(f"PPO model file not found: {model_path}")
 
     try:
         from stable_baselines3 import PPO

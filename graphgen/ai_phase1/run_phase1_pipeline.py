@@ -46,9 +46,9 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--phase2_mode",
-        default="heuristic",
-        choices=("heuristic", "ppo"),
-        help="Phase2 refinement mode (default: heuristic)",
+        default="rule",
+        choices=("rule", "rl-repair", "heuristic", "ppo"),
+        help="Phase2 refinement mode (default: rule)",
     )
     p.add_argument(
         "--phase2_model",
@@ -171,10 +171,10 @@ def main() -> int:
                     (
                         f"- model: `{args.phase2_model}`"
                         if args.phase2_mode == "ppo"
-                        else "- model: not used (heuristic)"
+                        else "- model: optional (used by rl-repair tabular policy)"
                     ),
                     f"- seed: `{args.phase2_seed}`",
-                    "- phase2 supports deterministic heuristic and PPO inference",
+                    "- phase2 supports rule (default), rl-repair (experimental), and PPO inference (legacy baseline)",
                 ]
                 if args.use_phase2
                 else []
