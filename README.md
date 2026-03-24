@@ -53,6 +53,31 @@ python -m graphgen.ai_phase2.eval
 Evaluation JSON output:
 - `results/phase2_eval_*.json`
 
+## Experimental vision scaffold (minimal, first PR)
+
+This repository now includes a **small trainable image-learning scaffold** in:
+- `graphgen/vision/dataset.py`
+- `graphgen/vision/model.py`
+- `graphgen/vision/train.py`
+- `graphgen/vision/infer.py`
+
+Current setup uses `datasets/standard/images` and generates **weak/pseudo masks on-the-fly** from color-threshold rules for initial supervised training.
+
+Train:
+```bash
+python -m graphgen.vision.train --images_dir datasets/standard/images --epochs 5 --out_dir outputs/vision
+```
+
+Infer (single image):
+```bash
+python -m graphgen.vision.infer \
+  --checkpoint outputs/vision/tiny_unet.pt \
+  --image datasets/standard/images/0001.png \
+  --out outputs/vision/pred_0001.png
+```
+
+> This is experimental and intentionally minimal. Future PRs will add stronger pseudo-label generation, DXF/Drawing1 integration, and graph artifact evaluation loops.
+
 ## Notes on Phase 2
 
 - Rule solver를 대체하지 않고, 후처리(local repair)로만 사용

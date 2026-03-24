@@ -1,5 +1,6 @@
 pillow
 numpy
 scipy
+torch
 gymnasium
 stable-baselines3
