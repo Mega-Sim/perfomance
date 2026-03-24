@@ -34,6 +34,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="PPO model path. Defaults to outputs/models/phase2_ppo_Drawing1.zip",
     )
+    p.add_argument(
+        "--model_stem",
+        default=None,
+        help="Optional artifact stem. Resolves to outputs/models/<stem>_<model_variant>.zip",
+    )
+    p.add_argument(
+        "--model_variant",
+        default="best",
+        choices=["best", "last"],
+        help="Model variant used with --model_stem (default: best)",
+    )
     p.add_argument("--out_dir", default="outputs/phase2_batch_eval", help="Batch output directory")
     p.add_argument("--seed", type=int, default=42, help="Random seed for deterministic PPO rollout")
     return p.parse_args()
@@ -86,7 +97,12 @@ def main() -> int:
         print(f"[ERROR] Invalid dataset input: {exc}")
         return 1
 
-    ppo_model = Path(args.ppo_model) if args.ppo_model else Path("outputs/models/phase2_ppo_Drawing1.zip")
+    if args.ppo_model:
+        ppo_model = Path(args.ppo_model)
+    elif args.model_stem:
+        ppo_model = Path("outputs/models") / f"{args.model_stem}_{args.model_variant}.zip"
+    else:
+        ppo_model = Path("outputs/models/phase2_ppo_Drawing1.zip")
     if not ppo_model.exists():
         print(f"[ERROR] PPO model file not found: {ppo_model}")
         return 1
