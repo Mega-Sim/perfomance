@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import torch
 
 from graphgen.vision.dataset import CLASS_ORDER, StandardVisionDataset
@@ -10,6 +8,7 @@ from graphgen.vision.model import TinyUNet
 
 def test_vision_dataset_and_model_smoke() -> None:
     ds = StandardVisionDataset("datasets/standard/images", image_size=128)
+    assert len(ds) > 0
     sample = ds[0]
 
     assert sample["image"].shape == (3, 128, 128)

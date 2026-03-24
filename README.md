@@ -76,7 +76,15 @@ python -m graphgen.vision.infer \
   --out outputs/vision/pred_0001.png
 ```
 
-> This is experimental and intentionally minimal. Future PRs will add stronger pseudo-label generation, DXF/Drawing1 integration, and graph artifact evaluation loops.
+Infer with random-initialized weights (no checkpoint):
+```bash
+python -m graphgen.vision.infer \
+  --image datasets/standard/images/0001.png \
+  --out outputs/vision/pred_0001_random.png
+```
+
+> Labels in this vision scaffold are currently weak/pseudo (rule-derived), and this is intentional for early pipeline validation.
+> Future PRs will add stronger pseudo-label generation, DXF/Drawing1 integration, and graph artifact evaluation loops.
 
 ## Notes on Phase 2
 
