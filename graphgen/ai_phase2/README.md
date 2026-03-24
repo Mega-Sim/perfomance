@@ -34,7 +34,7 @@ python -m graphgen.ai_phase1.run_phase1_pipeline \
 
 Expected outputs include both baseline Phase 1 files and Phase 2 refined files.
 
-Train PPO:
+Train PPO (single-layout smoke baseline):
 
 ```bash
 python -m graphgen.ai_phase2.train_phase2_rl \
@@ -43,6 +43,19 @@ python -m graphgen.ai_phase2.train_phase2_rl \
   --model_out outputs/models/phase2_ppo_Drawing1 \
   --seed 42
 ```
+
+Train PPO (multi-layout baseline):
+
+```bash
+python -m graphgen.ai_phase2.train_phase2_rl \
+  --dxf_dir examples \
+  --train_ratio 0.8 \
+  --total_timesteps 10000 \
+  --model_out outputs/models/phase2_ppo_multilayout \
+  --seed 42
+```
+
+Alternative input: `--dxf_list <manifest.txt|manifest.json>`.
 
 Use PPO inference:
 
@@ -65,4 +78,14 @@ python -m graphgen.ai_phase2.eval_phase2_rl \
   --seed 42
 ```
 
-This PPO path is a practical smoke baseline; it may not outperform heuristic yet.
+Batch evaluate multiple layouts and save aggregate report:
+
+```bash
+python -m graphgen.ai_phase2.eval_phase2_batch \
+  --dxf_dir examples \
+  --ppo_model outputs/models/phase2_ppo_multilayout.zip \
+  --out_dir outputs/phase2_batch_eval \
+  --seed 42
+```
+
+This PPO path remains a practical baseline; multi-layout results may still be worse than heuristic.
