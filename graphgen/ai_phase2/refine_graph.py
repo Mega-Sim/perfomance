@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from .env import LocalDirectionRepairEnv
 from .features import extract_edge_features
+from .policy import GreedyPolicy, TabularQPolicy
 from .ppo_inference import run_ppo_refinement
 from .reward import score_assignment_quality
 
 
-SUPPORTED_MODES = {"heuristic", "ppo"}
+SUPPORTED_MODES = {"rule", "rl-repair", "heuristic", "ppo"}
 
 
 def _decide_flip_heuristic(feature, current: int) -> int:
@@ -40,6 +42,9 @@ def refine_assignments(
     if mode not in SUPPORTED_MODES:
         raise ValueError(f"Unsupported phase2 mode: {mode}")
 
+    if mode == "heuristic":
+        mode = "rule"
+
     if mode == "ppo":
         if not model_path:
             raise ValueError("phase2 mode 'ppo' requires model_path")
@@ -51,6 +56,29 @@ def refine_assignments(
             model_path=model_path,
             seed=seed,
         )
+
+
+    if mode == "rl-repair":
+        env = LocalDirectionRepairEnv(edge_list, adj, station_nodes, assign, max_steps=min(12, max(4, len(edge_list))))
+        env.reset()
+        policy = GreedyPolicy()
+        if model_path:
+            try:
+                policy = TabularQPolicy.load(model_path)
+            except Exception:
+                policy = GreedyPolicy()
+        for _ in range(env.max_steps):
+            action = policy.select_action(env)
+            _, _, done, _ = env.step(action)
+            if done:
+                break
+
+        candidate = env.assign
+        if score_assignment_quality(edge_list, adj, station_nodes, candidate) >= score_assignment_quality(
+            edge_list, adj, station_nodes, assign
+        ):
+            return candidate
+        return dict(assign)
 
     features = extract_edge_features(edge_list, adj, station_nodes)
     refined_assign = dict(assign)
