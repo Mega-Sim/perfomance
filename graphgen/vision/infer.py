@@ -26,7 +26,11 @@ COLORS = np.array(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run minimal vision inference")
-    p.add_argument("--checkpoint", required=True)
+    p.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Optional model checkpoint (.pt). If omitted, runs with random-initialized weights.",
+    )
     p.add_argument("--image", required=True)
     p.add_argument("--out", required=True, help="Output PNG path for predicted segmentation image")
     p.add_argument("--image_size", type=int, default=256)
@@ -37,9 +41,17 @@ def main() -> int:
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    ckpt = torch.load(args.checkpoint, map_location=device)
     model = TinyUNet(num_classes=len(CLASS_ORDER)).to(device)
-    model.load_state_dict(ckpt["model_state"])
+    if args.checkpoint:
+        ckpt = torch.load(args.checkpoint, map_location=device)
+        model.load_state_dict(ckpt["model_state"])
+        if "image_size" in ckpt and args.image_size != int(ckpt["image_size"]):
+            print(
+                f"[vision.infer] checkpoint image_size={ckpt['image_size']} "
+                f"but using --image_size={args.image_size}",
+            )
+    else:
+        print("[vision.infer] no checkpoint provided; using random-initialized model")
     model.eval()
 
     x = load_image_tensor(args.image, image_size=args.image_size).unsqueeze(0).to(device)
