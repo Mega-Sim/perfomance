@@ -70,6 +70,19 @@ python -m graphgen.ai_phase2.train_phase2_rl \
   --seed 42
 ```
 
+### PPO 멀티 레이아웃 학습 (small baseline)
+
+```bash
+python -m graphgen.ai_phase2.train_phase2_rl \
+  --dxf_dir examples \
+  --train_ratio 0.8 \
+  --total_timesteps 10000 \
+  --model_out outputs/models/phase2_ppo_multilayout \
+  --seed 42
+```
+
+`--dxf_list <txt/json>`도 지원합니다. (한 줄에 하나의 dxf 경로 또는 JSON list/object)
+
 ### Phase1 파이프라인에서 Phase2 PPO 추론 사용
 
 ```bash
@@ -91,10 +104,26 @@ python -m graphgen.ai_phase2.eval_phase2_rl \
   --seed 42
 ```
 
+### Phase2 배치 평가 (여러 DXF + aggregate report)
+
+```bash
+python -m graphgen.ai_phase2.eval_phase2_batch \
+  --dxf_dir examples \
+  --ppo_model outputs/models/phase2_ppo_multilayout.zip \
+  --out_dir outputs/phase2_batch_eval \
+  --seed 42
+```
+
+생성물:
+- `outputs/phase2_batch_eval/per_layout/<layout>.json`
+- `outputs/phase2_batch_eval/summary.csv`
+- `outputs/phase2_batch_eval/summary.json`
+- `outputs/phase2_batch_eval/REPORT.md`
+
 생성물(예시):
 - `outputs/phase2_eval/drawing1_phase1.png`
 - `outputs/phase2_eval/drawing1_heuristic.png`
 - `outputs/phase2_eval/drawing1_ppo.png`
 - `outputs/phase2_eval/drawing1_report.md`
 
-> 현재 PPO 경로는 학습/추론 파이프라인 smoke baseline입니다. 휴리스틱보다 항상 우수함을 보장하지 않습니다.
+> 현재 PPO 경로는 여전히 baseline 성격의 smoke/generalization 단계입니다. 멀티 레이아웃 평가에서도 휴리스틱보다 항상 우수함을 보장하지 않습니다.
