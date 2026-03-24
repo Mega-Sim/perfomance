@@ -64,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dxf", default="examples/Drawing1.dxf", help="Input DXF file path")
     p.add_argument(
         "--ppo_model",
-        default="outputs/models/phase2_ppo_drawing1.zip",
+        default=None,
         help="PPO model path for phase2 PPO inference",
     )
     p.add_argument(
@@ -86,7 +86,8 @@ def _line(label: str, m: EvalMetrics) -> str:
 def main() -> int:
     args = parse_args()
     dxf_path = Path(args.dxf)
-    model_path = Path(args.ppo_model)
+    dxf_name = dxf_path.stem
+    model_path = Path(args.ppo_model) if args.ppo_model else Path("outputs/models") / f"phase2_ppo_{dxf_name}.zip"
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -116,12 +117,12 @@ def main() -> int:
     phase1_metrics = _metrics(edge_list, adj, station_nodes, phase1_assign)
     heuristic_metrics = _metrics(edge_list, adj, station_nodes, heuristic_assign)
 
-    phase1_png = out_dir / "drawing1_phase1.png"
-    phase1_json = out_dir / "drawing1_phase1.json"
-    heuristic_png = out_dir / "drawing1_heuristic.png"
-    heuristic_json = out_dir / "drawing1_heuristic.json"
-    ppo_png = out_dir / "drawing1_ppo.png"
-    ppo_json = out_dir / "drawing1_ppo.json"
+    phase1_png = out_dir / f"{dxf_name}_phase1.png"
+    phase1_json = out_dir / f"{dxf_name}_phase1.json"
+    heuristic_png = out_dir / f"{dxf_name}_heuristic.png"
+    heuristic_json = out_dir / f"{dxf_name}_heuristic.json"
+    ppo_png = out_dir / f"{dxf_name}_ppo.png"
+    ppo_json = out_dir / f"{dxf_name}_ppo.json"
 
     _render_and_dump(edge_list, adj, station_nodes, phase1_assign, phase1_png, phase1_json)
     _render_and_dump(edge_list, adj, station_nodes, heuristic_assign, heuristic_png, heuristic_json)
@@ -138,7 +139,7 @@ def main() -> int:
             seed=args.seed,
         )
     except Exception as exc:
-        report_md = out_dir / "drawing1_report.md"
+        report_md = out_dir / f"{dxf_name}_report.md"
         report_md.write_text(
             "\n".join(
                 [
@@ -178,7 +179,7 @@ def main() -> int:
     improved_vs_initial = ppo_metrics.score > phase1_metrics.score
     improved_vs_heuristic = ppo_metrics.score > heuristic_metrics.score
 
-    report_md = out_dir / "drawing1_report.md"
+    report_md = out_dir / f"{dxf_name}_report.md"
     report_md.write_text(
         "\n".join(
             [
@@ -231,7 +232,7 @@ def main() -> int:
     ]
     print("\n".join(console_lines))
 
-    summary_json = out_dir / "drawing1_report.json"
+    summary_json = out_dir / f"{dxf_name}_report.json"
     summary_json.write_text(
         json.dumps(
             {

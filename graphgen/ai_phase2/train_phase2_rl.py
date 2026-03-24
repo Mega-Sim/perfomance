@@ -16,8 +16,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--total_timesteps", type=int, default=5000, help="Total PPO timesteps")
     p.add_argument(
         "--model_out",
-        default="outputs/models/phase2_ppo_drawing1",
-        help="Output path for trained PPO model (default: outputs/models/phase2_ppo_drawing1)",
+        default=None,
+        help="Output path for trained PPO model (.zip auto-added if omitted)",
     )
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     return p.parse_args()
@@ -37,6 +37,7 @@ def main() -> int:
     if not dxf_path.exists():
         print(f"[ERROR] DXF file not found: {dxf_path}")
         return 1
+    dxf_name = dxf_path.stem
 
     print(f"[1/3] Build graph from {dxf_path}")
     lines, arcs, texts = parse_dxf(dxf_path)
@@ -53,7 +54,8 @@ def main() -> int:
     model = PPO("MlpPolicy", env, verbose=1, seed=args.seed, n_steps=64, batch_size=64)
     model.learn(total_timesteps=args.total_timesteps)
 
-    model_out = Path(args.model_out)
+    default_model_out = Path("outputs/models") / f"phase2_ppo_{dxf_name}"
+    model_out = Path(args.model_out) if args.model_out else default_model_out
     model_out.parent.mkdir(parents=True, exist_ok=True)
     model.save(str(model_out))
 

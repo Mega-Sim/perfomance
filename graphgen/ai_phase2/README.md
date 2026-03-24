@@ -40,7 +40,7 @@ Train PPO:
 python -m graphgen.ai_phase2.train_phase2_rl \
   --dxf examples/Drawing1.dxf \
   --total_timesteps 5000 \
-  --model_out outputs/models/phase2_ppo_drawing1 \
+  --model_out outputs/models/phase2_ppo_Drawing1 \
   --seed 42
 ```
 
@@ -51,7 +51,7 @@ python -m graphgen.ai_phase1.run_phase1_pipeline \
   --dxf examples/Drawing1.dxf \
   --use_phase2 \
   --phase2_mode ppo \
-  --phase2_model outputs/models/phase2_ppo_drawing1.zip \
+  --phase2_model outputs/models/phase2_ppo_Drawing1.zip \
   --phase2_seed 42
 ```
 
@@ -60,7 +60,7 @@ Evaluate baseline vs heuristic vs PPO (and save side-by-side artifacts):
 ```bash
 python -m graphgen.ai_phase2.eval_phase2_rl \
   --dxf examples/Drawing1.dxf \
-  --ppo_model outputs/models/phase2_ppo_drawing1.zip \
+  --ppo_model outputs/models/phase2_ppo_Drawing1.zip \
   --out_dir outputs/phase2_eval \
   --seed 42
 ```
