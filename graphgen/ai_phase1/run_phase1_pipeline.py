@@ -47,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--phase2_mode",
         default="heuristic",
+        choices=("heuristic", "ppo"),
         help="Phase2 refinement mode (default: heuristic)",
     )
     p.add_argument(

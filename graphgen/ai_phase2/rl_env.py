@@ -71,8 +71,6 @@ if gym is not None:
             initial_assign: dict[int, int],
             candidate_edge_ids: list[int] | None = None,
             max_steps: int | None = None,
-            step_penalty: float = 0.01,
-            final_improvement_bonus: float = 0.0,
         ):
             super().__init__()
             self.edge_list = edge_list
@@ -87,8 +85,6 @@ if gym is not None:
             self.candidate_edge_ids = list(candidate_edge_ids)
             self.max_steps = max_steps if max_steps is not None else len(self.candidate_edge_ids)
             self.max_steps = max(self.max_steps, 1)
-            self.step_penalty = float(step_penalty)
-            self.final_improvement_bonus = float(final_improvement_bonus)
 
             self.action_space = spaces.Discrete(2)
             self.observation_space = spaces.Box(
@@ -127,14 +123,12 @@ if gym is not None:
             new_score = score_assignment_quality(
                 self.edge_list, self.adj, self.station_nodes, self.current_assign
             )
-            reward = float(new_score - old_score - self.step_penalty)
+            reward = float(new_score - old_score)
             self.current_score = new_score
             self.step_index += 1
 
             if self.step_index >= min(len(self.candidate_edge_ids), self.max_steps):
                 terminated = True
-                if self.current_score > self.initial_score:
-                    reward += self.final_improvement_bonus
 
             info = {
                 "score": self.current_score,
