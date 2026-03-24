@@ -40,22 +40,33 @@ Train PPO (single-layout smoke baseline):
 python -m graphgen.ai_phase2.train_phase2_rl \
   --dxf examples/Drawing1.dxf \
   --total_timesteps 5000 \
-  --model_out outputs/models/phase2_ppo_Drawing1 \
+  --out_stem phase2_ppo_Drawing1 \
   --seed 42
 ```
 
-Train PPO (multi-layout baseline):
+Train PPO (multi-layout baseline + validation best-model selection):
 
 ```bash
 python -m graphgen.ai_phase2.train_phase2_rl \
   --dxf_dir examples \
   --train_ratio 0.8 \
   --total_timesteps 10000 \
-  --model_out outputs/models/phase2_ppo_multilayout \
+  --eval_freq 1000 \
+  --out_stem phase2_ppo_multilayout \
   --seed 42
 ```
 
 Alternative input: `--dxf_list <manifest.txt|manifest.json>`.
+
+Training artifacts are written to `outputs/models/`:
+
+- `<stem>_last.zip` (final checkpoint)
+- `<stem>_best.zip` (best validation checkpoint, selected by validation score)
+- `<stem>_train_log.csv`
+- `<stem>_train_log.json`
+- `<stem>_train_report.md`
+
+If validation is empty (`--train_ratio 1.0` or a single DXF), best-model selection is skipped and the report states that explicitly.
 
 Use PPO inference:
 
@@ -83,7 +94,8 @@ Batch evaluate multiple layouts and save aggregate report:
 ```bash
 python -m graphgen.ai_phase2.eval_phase2_batch \
   --dxf_dir examples \
-  --ppo_model outputs/models/phase2_ppo_multilayout.zip \
+  --model_stem phase2_ppo_multilayout \
+  --model_variant best \
   --out_dir outputs/phase2_batch_eval \
   --seed 42
 ```

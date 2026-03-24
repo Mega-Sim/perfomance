@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from graphgen.ai_phase2.dataset import load_dxf_paths, split_train_val
 from graphgen.ai_phase2.rl_env import GraphDirectionRefineEnv
+from graphgen.ai_phase2.train_callback import ValidationEvalCallback
 from src.build_graph import build_graph, parse_dxf, solve
 
 
@@ -65,10 +66,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--train_list", default=None, help="Explicit train list (.txt/.json). Requires --val_list")
     p.add_argument("--val_list", default=None, help="Explicit validation list (.txt/.json). Requires --train_list")
     p.add_argument("--total_timesteps", type=int, default=5000, help="Total PPO timesteps")
+    p.add_argument("--eval_freq", type=int, default=1000, help="Validation evaluation frequency in timesteps")
+    p.add_argument("--best_metric", default="score", choices=["score", "dead_ends", "station_issues", "nonholonomic_violations"])
+    p.add_argument("--out_stem", default=None, help="Artifact stem for outputs/models/<stem>_{last|best|train_log.*}")
+    p.add_argument("--save_best", action=argparse.BooleanOptionalAction, default=True, help="Save validation-selected best checkpoint")
+    p.add_argument("--save_last", action=argparse.BooleanOptionalAction, default=True, help="Save final checkpoint as <stem>_last.zip")
     p.add_argument(
         "--model_out",
         default=None,
-        help="Output path for trained PPO model (.zip auto-added if omitted)",
+        help="Compatibility output path for trained PPO model (.zip auto-added if omitted)",
     )
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     return p.parse_args()
@@ -117,6 +123,7 @@ def main() -> int:
 
     print(f"[1/3] Building training graphs from {len(train_paths)} DXF(s)")
     train_samples = [_build_sample(path) for path in train_paths]
+    val_samples = [_build_sample(path) for path in val_paths]
 
     if val_paths:
         print(f"        validation DXFs: {len(val_paths)}")
@@ -124,26 +131,72 @@ def main() -> int:
     print("[2/3] Train PPO baseline")
     env = MultiLayoutGraphEnv(samples=train_samples, seed=args.seed)
     model = PPO("MlpPolicy", env, verbose=1, seed=args.seed, n_steps=64, batch_size=64)
-    model.learn(total_timesteps=args.total_timesteps)
 
     default_stem = train_paths[0].stem if len(train_paths) == 1 else f"multilayout_n{len(train_paths)}"
-    default_model_out = Path("outputs/models") / f"phase2_ppo_{default_stem}"
-    model_out = Path(args.model_out) if args.model_out else default_model_out
-    model_out.parent.mkdir(parents=True, exist_ok=True)
-    model.save(str(model_out))
+    out_stem = args.out_stem or (Path(args.model_out).with_suffix("").name if args.model_out else f"phase2_ppo_{default_stem}")
+    model_dir = Path(args.model_out).parent if args.model_out else Path("outputs/models")
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    last_model_path = model_dir / f"{out_stem}_last.zip"
+    best_model_path = model_dir / f"{out_stem}_best.zip"
+    train_log_csv = model_dir / f"{out_stem}_train_log.csv"
+    train_log_json = model_dir / f"{out_stem}_train_log.json"
+    train_report_md = model_dir / f"{out_stem}_train_report.md"
+
+    callback = ValidationEvalCallback(
+        val_samples=val_samples,
+        eval_freq=args.eval_freq,
+        best_metric=args.best_metric,
+        best_model_path=best_model_path if args.save_best and val_samples else None,
+    )
+    model.learn(total_timesteps=args.total_timesteps, callback=callback)
+    if val_samples and (args.total_timesteps % max(1, args.eval_freq) != 0):
+        callback.evaluate_at_timestep(args.total_timesteps)
+
+    if args.save_last:
+        model.save(str(last_model_path))
+
+    model_out = Path(args.model_out) if args.model_out else None
+    if model_out:
+        model_out.parent.mkdir(parents=True, exist_ok=True)
+        model.save(str(model_out))
 
     split_info = {
         "seed": args.seed,
+        "eval_freq": args.eval_freq,
+        "best_metric": args.best_metric,
         "total_inputs": len(all_paths),
         "train_count": len(train_paths),
         "val_count": len(val_paths),
         "train_dxfs": [str(p) for p in train_paths],
         "val_dxfs": [str(p) for p in val_paths],
+        "last_model": str(last_model_path) if args.save_last else None,
+        "best_model": str(best_model_path) if (args.save_best and val_samples) else None,
+        "best_timestep": callback.best_timestep,
+        "best_summary": callback.best_summary,
     }
-    split_path = model_out.parent / f"{model_out.stem}_split.json"
+    split_path = model_dir / f"{out_stem}_split.json"
     split_path.write_text(json.dumps(split_info, indent=2), encoding="utf-8")
+    callback.write_artifacts(
+        csv_path=train_log_csv,
+        json_path=train_log_json,
+        report_path=train_report_md,
+        split_info=split_info,
+        total_timesteps=args.total_timesteps,
+        last_model_path=last_model_path if args.save_last else None,
+        best_model_path=best_model_path if (args.save_best and val_samples) else None,
+    )
 
-    print(f"[3/3] Saved model: {model_out}")
+    print(f"[3/3] Saved last model: {last_model_path}" if args.save_last else "[3/3] Skipped last model save (--no-save_last)")
+    if args.save_best and val_samples:
+        print(f"      Saved best model: {best_model_path}")
+    elif args.save_best:
+        print("      Best model selection skipped (empty validation set)")
+    if model_out:
+        print(f"      Compatibility model: {model_out}")
+    print(f"      Train log CSV: {train_log_csv}")
+    print(f"      Train log JSON: {train_log_json}")
+    print(f"      Train report: {train_report_md}")
     print(f"      Split metadata: {split_path}")
     return 0
 

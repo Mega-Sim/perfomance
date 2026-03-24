@@ -66,7 +66,7 @@ Phase2는 `solve()` 이후에 기존 방향 할당을 **keep/flip** 방식으로
 python -m graphgen.ai_phase2.train_phase2_rl \
   --dxf examples/Drawing1.dxf \
   --total_timesteps 5000 \
-  --model_out outputs/models/phase2_ppo_drawing1 \
+  --out_stem phase2_ppo_drawing1 \
   --seed 42
 ```
 
@@ -77,11 +77,20 @@ python -m graphgen.ai_phase2.train_phase2_rl \
   --dxf_dir examples \
   --train_ratio 0.8 \
   --total_timesteps 10000 \
-  --model_out outputs/models/phase2_ppo_multilayout \
+  --eval_freq 1000 \
+  --out_stem phase2_ppo_multilayout \
   --seed 42
 ```
 
 `--dxf_list <txt/json>`도 지원합니다. (한 줄에 하나의 dxf 경로 또는 JSON list/object)
+검증셋이 있을 때 best model은 평균 validation score 기준으로 선택됩니다.
+
+생성물(모델 디렉토리):
+- `outputs/models/<stem>_last.zip`
+- `outputs/models/<stem>_best.zip` (validation이 있을 때)
+- `outputs/models/<stem>_train_log.csv`
+- `outputs/models/<stem>_train_log.json`
+- `outputs/models/<stem>_train_report.md`
 
 ### Phase1 파이프라인에서 Phase2 PPO 추론 사용
 
@@ -109,7 +118,8 @@ python -m graphgen.ai_phase2.eval_phase2_rl \
 ```bash
 python -m graphgen.ai_phase2.eval_phase2_batch \
   --dxf_dir examples \
-  --ppo_model outputs/models/phase2_ppo_multilayout.zip \
+  --model_stem phase2_ppo_multilayout \
+  --model_variant best \
   --out_dir outputs/phase2_batch_eval \
   --seed 42
 ```
