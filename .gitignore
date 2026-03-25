@@ -1,5 +1,11 @@
 # Generated outputs and reports
 outputs/
+tmp/
+*.png
+*.jpg
+*.npy
+*.pt
+*.pth
 
 # Python cache/temp
 __pycache__/
