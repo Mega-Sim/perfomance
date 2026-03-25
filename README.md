@@ -68,23 +68,42 @@ Train:
 python -m graphgen.vision.train --images_dir datasets/standard/images --epochs 5 --out_dir outputs/vision
 ```
 
-Infer (single image):
+Infer to graph JSON (single image):
 ```bash
 python -m graphgen.vision.infer \
   --checkpoint outputs/vision/tiny_unet.pt \
   --image datasets/standard/images/0001.png \
-  --out outputs/vision/pred_0001.png
+  --out outputs/vision/graph_0001.json
 ```
 
 Infer with random-initialized weights (no checkpoint):
 ```bash
 python -m graphgen.vision.infer \
   --image datasets/standard/images/0001.png \
-  --out outputs/vision/pred_0001_random.png
+  --out outputs/vision/graph_0001_random.json
 ```
 
 > Labels in this vision scaffold are currently weak/pseudo (rule-derived), and this is intentional for early pipeline validation.
-> Future PRs will add stronger pseudo-label generation, DXF/Drawing1 integration, and graph artifact evaluation loops.
+> Output graph is a simple first-pass extraction from predicted mask components (for review/iteration).
+
+### Drawing1 image-based AI inference demo
+
+DXF를 렌더링해서 이미지 기반 AI 추론으로 간단 그래프 JSON을 생성합니다.
+
+Render `Drawing1.dxf` to image:
+```bash
+python -m graphgen.vision.render_dxf --dxf examples/Drawing1.dxf --out tmp/drawing1.png
+```
+
+Infer graph from rendered image:
+```bash
+python -m graphgen.vision.infer --image tmp/drawing1.png --out outputs/drawing1_graph.json
+```
+
+One-command pipeline:
+```bash
+python -m graphgen.vision.run_drawing1_pipeline --dxf examples/Drawing1.dxf --tmp_image tmp/drawing1.png --out outputs/drawing1_graph.json
+```
 
 ## Notes on Phase 2
 
